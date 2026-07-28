@@ -1,0 +1,79 @@
+# ---------------------------------------------------------------------------
+# SECRETS — never commit these.
+#
+# A Google service-account JSON key is a bearer credential for the ENTIRE
+# Drive corpus of the impersonated subject (lucaso@avatarnaturalfoods.com).
+# Anyone holding the file can read every file that account can see, with no
+# further authentication and no MFA prompt. Treat it like a root password.
+#
+# Odoo API keys are equivalent for the ERP side.
+# ---------------------------------------------------------------------------
+*.key.json
+*service-account*.json
+*service_account*.json
+credentials*.json
+client_secret*.json
+gcp-*.json
+sa-*.json
+secrets/
+.secrets/
+*.pem
+*.p12
+
+# Environment / local config
+.env
+.env.*
+!.env.example
+odoo.conf
+*.local.conf
+
+# Sync state that must never be shared between environments.
+# Drive change-page tokens are per-connection and per-corpus; replaying one
+# from another environment silently yields a wrong incremental delta.
+*.state.json
+sync_state/
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+venv/
+.venv/
+env/
+ENV/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# ---------------------------------------------------------------------------
+# Odoo runtime artifacts
+# ---------------------------------------------------------------------------
+*.log
+filestore/
+sessions/
+.odoorc
+
+# ---------------------------------------------------------------------------
+# Editors / OS
+# ---------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
