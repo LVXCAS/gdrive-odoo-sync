@@ -1,0 +1,32 @@
+# This addon is authored on Windows but deployed to a Linux Odoo server.
+# Normalize everything to LF in the repository so what lands on the server is
+# never CRLF. Python tolerates CRLF; shell scripts and some config parsers
+# do not, and CRLF also produces whole-file diffs that hide real changes.
+* text=auto eol=lf
+
+# Explicit for the file types this module actually ships.
+*.py    text eol=lf
+*.xml   text eol=lf
+*.csv   text eol=lf
+*.md    text eol=lf
+*.txt   text eol=lf
+*.cfg   text eol=lf
+*.conf  text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.js    text eol=lf
+*.scss  text eol=lf
+
+# Binary — never touch, never diff.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.pdf   binary
+*.xlsx  binary
+*.zip   binary
+
+# SPEC.md is large and regenerated wholesale by the architect agent; keeping
+# it diffable is more useful than keeping it small.
+docs/*.md text eol=lf diff
