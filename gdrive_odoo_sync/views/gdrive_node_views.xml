@@ -1,0 +1,239 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    gdrive.node views - the mirrored Drive tree.
+
+    WHY the search view leads with owner_email and shared_drive_id: the whole point
+    of impersonating a Workspace user is that files owned by *other* people show up.
+    When an admin asks "did we actually pick up the folder Michael shared?", the
+    answer has to be one click away, not a domain typed by hand.
+
+    Identity is `google_id`, never `name`. Duplicate titles are legal and expected
+    (two distinct files named Bettr_Bowl_Data_Request exist), so the list always
+    exposes the id column and the list is ordered by materialized `path`.
+-->
+<odoo>
+
+    <record id="gdrive_node_view_search" model="ir.ui.view">
+        <field name="name">gdrive.node.search</field>
+        <field name="model">gdrive.node</field>
+        <field name="arch" type="xml">
+            <search string="Drive Nodes">
+                <field name="name" string="Name / Path" filter_domain="['|', ('name', 'ilike', self), ('path', 'ilike', self)]"/>
+                <field name="google_id"/>
+                <field name="owner_email"/>
+                <field name="mime_type"/>
+                <field name="parent_id"/>
+                <field name="connection_id"/>
+                <separator/>
+                <filter name="filter_folders" string="Folders" domain="[('node_type', '=', 'folder')]"/>
+                <filter name="filter_spreadsheets" string="Spreadsheets" domain="[('node_type', '=', 'spreadsheet')]"/>
+                <filter name="filter_blobs" string="Binary Files" domain="[('node_type', '=', 'blob')]"/>
+                <filter name="filter_docs" string="Docs / Slides / Drawings" domain="[('node_type', 'in', ['document', 'presentation', 'drawing'])]"/>
+                <filter name="filter_shortcuts" string="Shortcuts" domain="[('node_type', '=', 'shortcut')]"/>
+                <separator/>
+                <filter name="filter_ingested" string="Ingested" domain="[('state', '=', 'ingested')]"/>
+                <filter name="filter_queued" string="Queued" domain="[('state', 'in', ['discovered', 'queued'])]"/>
+                <filter name="filter_skipped" string="Skipped" domain="[('state', '=', 'skipped')]"/>
+                <filter name="filter_error" string="In Error" domain="[('state', '=', 'error')]"/>
+                <filter name="filter_gone" string="Gone from Drive" domain="[('state', '=', 'gone')]"/>
+                <separator/>
+                <filter name="filter_orphans" string="Orphans" domain="[('is_orphan', '=', True)]"
+                        help="No visible parent resolved - these hang off the synthetic /(orphans) root."/>
+                <filter name="filter_trashed" string="Trashed in Drive" domain="[('trashed', '=', True)]"/>
+                <filter name="filter_shared_with_me" string="Shared With Me" domain="[('is_shared_with_me', '=', True)]"/>
+                <filter name="filter_shared_drive" string="On a Shared Drive" domain="[('shared_drive_id', '!=', False)]"/>
+                <separator/>
+                <filter name="filter_inactive" string="Archived" domain="[('active', '=', False)]"/>
+                <group expand="0" string="Group By">
+                    <filter name="group_node_type" string="Type" context="{'group_by': 'node_type'}"/>
+                    <filter name="group_state" string="Status" context="{'group_by': 'state'}"/>
+                    <filter name="group_owner" string="Owner" context="{'group_by': 'owner_email'}"/>
+                    <filter name="group_shared_drive" string="Shared Drive" context="{'group_by': 'shared_drive_id'}"/>
+                    <filter name="group_parent" string="Parent Folder" context="{'group_by': 'parent_id'}"/>
+                    <filter name="group_skip_reason" string="Skip Reason" context="{'group_by': 'skip_reason'}"/>
+                    <filter name="group_connection" string="Connection" context="{'group_by': 'connection_id'}"/>
+                    <filter name="group_modified" string="Modified in Drive" context="{'group_by': 'drive_modified_time'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="gdrive_node_view_list" model="ir.ui.view">
+        <field name="name">gdrive.node.list</field>
+        <field name="model">gdrive.node</field>
+        <field name="arch" type="xml">
+            <list string="Drive Nodes"
+                  default_order="path asc, name asc"
+                  decoration-danger="state == 'error'"
+                  decoration-warning="state == 'skipped'"
+                  decoration-muted="state == 'gone' or trashed"
+                  decoration-success="state == 'ingested'">
+                <field name="path" string="Path" widget="char"/>
+                <field name="name"/>
+                <field name="node_type"/>
+                <field name="owner_email" optional="show"/>
+                <field name="shared_drive_id" optional="hide"/>
+                <field name="size_bytes" optional="hide" widget="integer"/>
+                <field name="drive_modified_time" optional="show"/>
+                <field name="attachment_id" optional="hide"/>
+                <field name="skip_reason" optional="hide"/>
+                <field name="trashed" optional="hide"/>
+                <field name="is_orphan" optional="hide"/>
+                <field name="google_id" optional="hide"/>
+                <field name="connection_id" optional="hide"/>
+                <field name="state" widget="badge"
+                       decoration-success="state == 'ingested'"
+                       decoration-danger="state == 'error'"
+                       decoration-warning="state == 'skipped'"
+                       decoration-muted="state == 'gone'"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="gdrive_node_view_kanban" model="ir.ui.view">
+        <field name="name">gdrive.node.kanban</field>
+        <field name="model">gdrive.node</field>
+        <field name="arch" type="xml">
+            <kanban default_group_by="node_type" class="o_kanban_small_column" sample="1">
+                <field name="node_type"/>
+                <templates>
+                    <t t-name="card">
+                        <div class="d-flex justify-content-between">
+                            <field name="name" class="fw-bold fs-5"/>
+                            <field name="state" widget="badge"
+                                   decoration-success="state == 'ingested'"
+                                   decoration-danger="state == 'error'"
+                                   decoration-warning="state == 'skipped'"
+                                   decoration-muted="state == 'gone'"/>
+                        </div>
+                        <div class="text-muted">
+                            <field name="path"/>
+                        </div>
+                        <div class="d-flex justify-content-between mt-2">
+                            <span><field name="owner_email"/></span>
+                            <span><field name="drive_modified_time" widget="date"/></span>
+                        </div>
+                    </t>
+                </templates>
+            </kanban>
+        </field>
+    </record>
+
+    <record id="gdrive_node_view_form" model="ir.ui.view">
+        <field name="name">gdrive.node.form</field>
+        <field name="model">gdrive.node</field>
+        <field name="arch" type="xml">
+            <form string="Drive Node">
+                <header>
+                    <field name="state" widget="statusbar"
+                           statusbar_visible="discovered,queued,ingested"/>
+                </header>
+                <sheet>
+                    <widget name="web_ribbon" title="Gone from Drive" bg_color="text-bg-danger"
+                            invisible="state != 'gone'"/>
+                    <div class="oe_title">
+                        <label for="name"/>
+                        <h1><field name="name" readonly="1"/></h1>
+                        <h3 class="text-muted"><field name="path" readonly="1"/></h3>
+                    </div>
+                    <div class="alert alert-danger" role="alert" invisible="not last_error">
+                        <field name="last_error" readonly="1" nolabel="1"/>
+                    </div>
+                    <div class="alert alert-warning" role="alert" invisible="state != 'skipped'">
+                        This node was recorded but not ingested. Reason:
+                        <field name="skip_reason" readonly="1" nolabel="1" class="oe_inline"/>.
+                        Skipped nodes are never deleted - their existence stays auditable.
+                    </div>
+                    <group>
+                        <group string="Drive Identity">
+                            <field name="google_id" readonly="1"/>
+                            <field name="mime_type" readonly="1"/>
+                            <field name="node_type" readonly="1"/>
+                            <field name="owner_email" readonly="1"/>
+                            <field name="shared_drive_id" readonly="1"/>
+                            <field name="is_shared_with_me" readonly="1"/>
+                            <field name="web_view_link" widget="url" readonly="1"/>
+                        </group>
+                        <group string="Placement">
+                            <field name="connection_id" readonly="1"/>
+                            <field name="parent_id" readonly="1"/>
+                            <field name="depth" readonly="1"/>
+                            <field name="is_orphan" readonly="1"/>
+                            <field name="shortcut_target_google_id" readonly="1"
+                                   invisible="node_type != 'shortcut'"/>
+                            <field name="shortcut_target_mime" readonly="1"
+                                   invisible="node_type != 'shortcut'"/>
+                            <field name="resolved_node_id" readonly="1"
+                                   invisible="node_type != 'shortcut'"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group string="Content">
+                            <field name="size_bytes" readonly="1"/>
+                            <field name="md5_checksum" readonly="1"/>
+                            <field name="drive_version" readonly="1"/>
+                            <field name="can_download" readonly="1"/>
+                            <field name="trashed" readonly="1"/>
+                            <field name="active" readonly="1"/>
+                        </group>
+                        <group string="Mirror">
+                            <field name="ingest_policy"/>
+                            <field name="attachment_id" readonly="1"/>
+                            <field name="text_attachment_id" readonly="1"/>
+                            <field name="attachment_checksum" readonly="1"/>
+                            <field name="last_ingest_date" readonly="1"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group string="Drive Timestamps">
+                            <field name="drive_created_time" readonly="1"/>
+                            <field name="drive_modified_time" readonly="1"/>
+                        </group>
+                        <group string="Sync Timestamps">
+                            <field name="last_seen_date" readonly="1"/>
+                            <field name="gone_since" readonly="1"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Datasets" name="datasets" invisible="node_type not in ['spreadsheet', 'blob']">
+                            <field name="dataset_ids" nolabel="1" readonly="1">
+                                <list string="Tabs">
+                                    <field name="tab_index"/>
+                                    <field name="tab_title"/>
+                                    <field name="sheet_gid"/>
+                                    <field name="source_kind"/>
+                                    <field name="row_count"/>
+                                    <field name="last_stage_date"/>
+                                    <field name="state" widget="badge"/>
+                                </list>
+                            </field>
+                        </page>
+                    </notebook>
+                    <div class="text-muted mt-2">
+                        Drive files may have several parents; only shared-drive files are guaranteed to
+                        have exactly one. <em>Parent</em> above is the first entry of the raw parents array
+                        that resolved to a visible node; when none resolves the node is flagged as an orphan.
+                    </div>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_gdrive_node" model="ir.actions.act_window">
+        <field name="name">Drive Nodes</field>
+        <field name="res_model">gdrive.node</field>
+        <field name="view_mode">list,kanban,form</field>
+        <field name="search_view_id" ref="gdrive_node_view_search"/>
+        <field name="context">{'search_default_group_node_type': 0}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">No Drive node has been discovered yet</p>
+            <p>
+                Run <em>Test Connection</em> and then <em>Run Discovery</em> on a connection.
+                An empty result after a successful test almost always means the domain-wide
+                delegation grant is missing or scoped wrongly.
+            </p>
+        </field>
+    </record>
+
+</odoo>

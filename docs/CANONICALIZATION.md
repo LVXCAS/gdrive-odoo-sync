@@ -11,7 +11,7 @@ Lane C is **stdlib-only**: `hashlib`, `decimal`, `unicodedata`, `datetime`, `zon
 ## 1. Versioning and cache invalidation
 
 ```python
-CANON_VERSION = "gos-canon-1"          # bump on ANY behavioural change in lane C
+CANON_VERSION = "gos-canon-2"          # bump on ANY behavioural change in lane C
 ```
 
 ```python

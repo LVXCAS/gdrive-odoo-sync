@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Security groups for gdrive_odoo_sync (SPEC §7.1).
+
+    Three groups, strictly nested, each one a superset of the last:
+
+        group_gdrive_user     implies base.group_user
+        group_gdrive_manager  implies group_gdrive_user
+        group_gdrive_admin    implies group_gdrive_manager
+
+    Category is base.module_category_productivity (SPEC §7.1), so Odoo renders
+    the trio as a single "Google Drive Sync" selector on the user form rather
+    than as three independent checkboxes — which is what the strict nesting
+    means anyway, and stops an administrator from creating the nonsensical
+    "manager but not user" combination by hand.
+
+    WHY three groups and not two: the interesting boundary in this module is
+    not "can see" vs "can configure", it is *"can author a mapping"* vs
+    *"can execute a plan that writes to res.partner"*. A manager who builds and
+    enables a mapping is doing normal, reversible configuration work. An
+    administrator who applies a heal plan is mutating live business records,
+    possibly soft-deleting them. Collapsing those two into one group means the
+    person who writes the mapping is also the person who approves its
+    consequences, which removes the only human checkpoint the system has.
+
+    Note that ACL alone is NOT the guard on plan application: gdrive.plan's
+    action_apply() additionally calls
+    self.env.user.has_group('gdrive_odoo_sync.group_gdrive_admin') in Python.
+
+    Managers are READ-ONLY on gdrive.plan and gdrive.plan.action. They used to
+    hold write+create on both, nominally "only so the heal wizard can toggle
+    each line's `selected` flag" — but Odoo ACLs are per MODEL, not per field.
+    Blanket write let the role that is explicitly forbidden from applying plans
+    rewrite an admin-approved plan before the admin executed it: change an
+    action's res_model to res.users, its res_id to 2 and its payload to
+    {'active': False}, or add new actions outright, and the apply fingerprints
+    (drive version, drive mtime, Odoo row count, max write_date, both dataset
+    hashes) cover none of it — they describe the *data*, not the plan's own
+    action rows. Write on gdrive.plan itself additionally exposed `state` and
+    `dry_run`, i.e. self-approval and disarming the dry run.
+
+    The heal wizard's per-line `selected` toggle therefore belongs on its own
+    transient line model (gdrive.heal.wizard.line, which managers do own), never
+    on the persistent gdrive.plan.action rows an admin is about to execute.
+
+    Credential entry (the service-account JSON) is gated more narrowly still,
+    with groups="base.group_system" on the res.config.settings field — a
+    gdrive administrator manages the sync, but only a system administrator
+    handles a bearer credential for someone's entire Google Drive.
+
+    This file loads FIRST in __manifest__.py's data list, because both
+    ir.model.access.csv and gdrive_record_rules.xml reference these xml ids.
+-->
+<odoo>
+
+    <record id="group_gdrive_user" model="res.groups">
+        <field name="name">Google Drive Sync / User</field>
+        <field name="category_id" ref="base.module_category_productivity"/>
+        <field name="implied_ids" eval="[(4, ref('base.group_user'))]"/>
+        <field name="comment">Read-only consumer of the sync. Browses mirrored Drive nodes and their
+attachments, datasets, staged rows, verifications and drift findings.
+Changes no configuration and triggers no run.</field>
+    </record>
+
+    <record id="group_gdrive_manager" model="res.groups">
+        <field name="name">Google Drive Sync / Manager</field>
+        <field name="category_id" ref="base.module_category_productivity"/>
+        <field name="implied_ids" eval="[(4, ref('gdrive_odoo_sync.group_gdrive_user'))]"/>
+        <field name="comment">Authors promotion mappings, edits scope rules, triggers discovery/staging runs
+and previews heal plans. Explicitly CANNOT apply a plan: previewing is
+non-mutating, applying writes to live business records.</field>
+    </record>
+
+    <record id="group_gdrive_admin" model="res.groups">
+        <field name="name">Google Drive Sync / Administrator</field>
+        <field name="category_id" ref="base.module_category_productivity"/>
+        <field name="implied_ids" eval="[(4, ref('gdrive_odoo_sync.group_gdrive_manager'))]"/>
+        <field name="comment">Manages connections, approves and applies heal plans, and is the only role that
+may enable auto_heal. Entering the service-account key itself additionally
+requires Settings / Technical (base.group_system).</field>
+    </record>
+
+    <!--
+        The Odoo super-user is put in the administrator group so a fresh install
+        is immediately usable by whoever installed it. Every other user starts
+        with no gdrive group at all: with no ACL row matching them they simply
+        do not see the menus — the correct default for a tool that can rewrite
+        res.partner.
+    -->
+    <record id="base.user_admin" model="res.users">
+        <field name="groups_id" eval="[(4, ref('gdrive_odoo_sync.group_gdrive_admin'))]"/>
+    </record>
+
+</odoo>

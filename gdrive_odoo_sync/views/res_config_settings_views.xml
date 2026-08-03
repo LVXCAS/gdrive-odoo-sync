@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Settings block for gdrive_odoo_sync (SPEC §2.5, §7.4; FILE_MANIFEST lane F).
+
+    WHY the service-account key is entered *here* and nowhere else
+    =============================================================
+    The key is a bearer credential for the entire Google Drive of the
+    impersonated Workspace user. Three structural consequences shape this file:
+
+      * It must never be a field on a regular model with a form view. Regular
+        models get exported, duplicated, tracked in chatter and dumped by the
+        generic export wizard. `res.config.settings` is transient: the value is
+        written straight through to `ir.config_parameter` and the settings
+        record itself is discarded.
+      * `password="True"` keeps it out of the rendered DOM as plaintext, and
+        `groups="base.group_system"` narrows entry to Settings/Technical -
+        deliberately *narrower* than group_gdrive_admin. Administering the sync
+        and holding somebody's Drive credential are different privileges.
+      * The environment variable is the preferred source and the note below says
+        so on screen, because Odoo.sh database dumps are downloadable by anyone
+        with project access and `ir_config_parameter` values appear in them in
+        cleartext. Leaving this field empty is the *better* configuration.
+
+    A note on the empty value: `set_param` with a falsy value DELETES the
+    parameter rather than storing an empty string. That is handled in the model
+    inverse (lane D); it is mentioned here so nobody "fixes" it by writing ''.
+-->
+<odoo>
+
+    <record id="res_config_settings_view_form_gdrive" model="ir.ui.view">
+        <field name="name">res.config.settings.form.inherit.gdrive.odoo.sync</field>
+        <field name="model">res.config.settings</field>
+        <field name="inherit_id" ref="base.res_config_settings_view_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//form" position="inside">
+                <app data-string="Google Drive Sync"
+                     string="Google Drive Sync"
+                     name="gdrive_odoo_sync"
+                     logo="/gdrive_odoo_sync/static/description/icon.png">
+
+                    <block title="Credentials" name="gdrive_credentials_block">
+                        <setting id="gdrive_sa_key_setting"
+                                 string="Service Account Key (JSON)"
+                                 help="The downloaded service-account JSON key. Prefer the environment variable instead - see the note below."
+                                 groups="base.group_system">
+                            <field name="gdrive_sa_key_json"
+                                   password="True"
+                                   groups="base.group_system"
+                                   placeholder='{"type": "service_account", "client_email": "...", "client_id": "...", "private_key": "-----BEGIN PRIVATE KEY-----..."}'/>
+                            <div class="text-muted mt-2">
+                                <p class="mb-1">
+                                    <strong>Prefer the environment variable.</strong> Set
+                                    <code>GDRIVE_ODOO_SYNC_SA_KEY</code> on the Odoo.sh project (or in the
+                                    server process environment) to the raw JSON and leave this field empty.
+                                    It is checked first, and it keeps the credential out of the database -
+                                    which matters because database dumps are downloadable and
+                                    <code>ir_config_parameter</code> values appear in them in cleartext.
+                                </p>
+                                <p class="mb-1">
+                                    Clearing this field deletes the stored parameter rather than storing an
+                                    empty string, so the environment variable (or nothing at all) takes over.
+                                </p>
+                                <p class="mb-0">
+                                    The two OAuth scopes are fixed and read-only by design:
+                                    <code>drive.readonly</code> and <code>spreadsheets.readonly</code>.
+                                    The module structurally cannot write to Google Drive.
+                                </p>
+                            </div>
+                        </setting>
+
+                        <setting id="gdrive_default_subject_setting"
+                                 string="Default Impersonation Subject"
+                                 help="Pre-filled on new connections. Domain-wide delegation cannot impersonate a consumer @gmail.com account.">
+                            <field name="gdrive_default_subject" placeholder="lucaso@avatarnaturalfoods.com"/>
+                        </setting>
+                    </block>
+
+                    <block title="Pacing" name="gdrive_pacing_block">
+                        <setting id="gdrive_sheets_reads_setting"
+                                 string="Sheets Reads per Minute"
+                                 help="Client-side token bucket. Google's hard cap is 60 per minute per user; pacing up front is strictly cheaper than backing off after a 429.">
+                            <field name="gdrive_sheets_reads_per_min"/>
+                        </setting>
+                        <setting id="gdrive_drive_units_setting"
+                                 string="Drive Quota Units per Minute"
+                                 help="Against Google's documented 325 000/min/user ceiling, which is shared with everything else acting as this user.">
+                            <field name="gdrive_drive_units_per_min"/>
+                        </setting>
+                    </block>
+
+                    <block title="Retention" name="gdrive_retention_block">
+                        <setting id="gdrive_run_retention_setting"
+                                 string="Run Retention (days)"
+                                 help="How long sync runs, their log lines and their gzipped log attachments are kept before the housekeeping cron prunes them.">
+                            <field name="gdrive_run_retention_days"/>
+                        </setting>
+                        <setting id="gdrive_plan_expiry_setting"
+                                 string="Plan Expiry (hours)"
+                                 help="A plan describes a world that was true when it was computed. Beyond this age it can no longer be applied, and apply re-checks every fingerprint regardless.">
+                            <field name="gdrive_plan_expiry_hours"/>
+                        </setting>
+                    </block>
+
+                </app>
+            </xpath>
+        </field>
+    </record>
+
+    <record id="action_gdrive_config_settings" model="ir.actions.act_window">
+        <field name="name">Settings</field>
+        <field name="res_model">res.config.settings</field>
+        <field name="view_mode">form</field>
+        <field name="target">inline</field>
+        <field name="context">{'module': 'gdrive_odoo_sync'}</field>
+    </record>
+
+</odoo>

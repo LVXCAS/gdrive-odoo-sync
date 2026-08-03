@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Sequence for gdrive.sync.run names (SPEC §3.15).
+
+    noupdate="1" is mandatory. Without it, every `-u gdrive_odoo_sync` upgrade
+    would reset `number_next_actual` back to 1 and start re-issuing run names
+    that already exist in the log. Run names end up in chatter digests, in
+    support tickets and in the gzipped JSONL log attachments; two different runs
+    sharing a name makes every one of those references ambiguous forever.
+
+    use_date_range="True" is what makes %(range_year)s resolve. With it off,
+    Odoo has no date range to interpolate and the prefix renders literally as
+    the string "SYNC/%(range_year)s/", which is both ugly and useless for
+    sorting.
+
+    Yearly ranges (not monthly) because a run number should stay short and
+    human-quotable across a whole year of 15-minute discovery crons: at four
+    runs an hour that is ~35 000 runs a year, which fits comfortably in the
+    5-digit padding. If a deployment ever exceeds 99 999 runs in a year the
+    sequence does not break — Odoo simply stops padding and rolls to 6 digits —
+    but the retention cron (_cron_gc, 90 days) should have pruned long before.
+-->
+<odoo>
+  <data noupdate="1">
+
+    <record id="seq_gdrive_sync_run" model="ir.sequence">
+      <field name="name">Google Drive Sync Run</field>
+      <field name="code">gdrive.sync.run</field>
+      <field name="prefix">SYNC/%(range_year)s/</field>
+      <field name="padding">5</field>
+      <field name="number_increment">1</field>
+      <field name="number_next">1</field>
+      <field name="implementation">standard</field>
+      <field name="use_date_range" eval="True"/>
+      <field name="company_id" eval="False"/>
+    </record>
+
+  </data>
+</odoo>

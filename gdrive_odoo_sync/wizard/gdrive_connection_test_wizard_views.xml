@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    gdrive.connection.test.wizard - the day-one artefact (SPEC §2.4).
+
+    WHY this dialog exists before anything else in the product
+    =========================================================
+    A Google Cloud service account is a *principal*, not a view onto an
+    organisation. Without domain-wide delegation it authenticates perfectly,
+    returns HTTP 200, and lists **zero files** - because "user" means the
+    service account, whose own Drive is empty and quota-less.
+
+    An empty read is indistinguishable from "everything was deleted". That is
+    the single most dangerous failure mode in this system, and every delete
+    guard in SPEC §9.6 exists partly because of it. So the setup is proved
+    probe by probe, and each probe reports its own outcome rather than being
+    rolled into one green tick:
+
+        P1 key parses            P5 shared-with-me reachable
+        P2 token mints           P6 shared drives enumerable
+        P3 impersonation works   P7 Sheets API reachable
+        P4 corpus is non-empty
+
+    P4 returning zero while P3 passes is rendered as a RED ERROR, never as an
+    empty state, because for the configured subject an empty Drive is not a
+    plausible reading of reality - it is the signature of a broken grant.
+
+    `state='ok'` on the connection is set only when P1-P4 all pass.
+-->
+<odoo>
+
+    <record id="gdrive_connection_test_wizard_view_form" model="ir.ui.view">
+        <field name="name">gdrive.connection.test.wizard.form</field>
+        <field name="model">gdrive.connection.test.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Test Google Drive Connection">
+                <field name="state" invisible="1"/>
+                <group invisible="state != 'setup'">
+                    <field name="connection_id" options="{'no_create': True, 'no_open': True}"/>
+                </group>
+                <div class="alert alert-info" role="alert" invisible="state != 'setup'">
+                    <p class="mb-1">
+                        This runs seven read-only probes against Google and reports each one
+                        separately. Nothing is written - to Drive or to Odoo - except the
+                        connection's status and the timestamp of this test.
+                    </p>
+                    <p class="mb-0">
+                        If the token mints but impersonation fails, the numeric client id or the
+                        scope string in the Google Admin console is wrong. If impersonation
+                        succeeds but the corpus is empty, the delegation grant has not propagated
+                        or was authorized for a different service account.
+                    </p>
+                </div>
+
+                <div invisible="state != 'result'">
+                    <field name="result_html" nolabel="1" readonly="1" widget="html"/>
+                    <group string="First Files Seen" invisible="not sample_file_ids">
+                        <field name="sample_file_ids" nolabel="1" readonly="1"/>
+                    </group>
+                    <div class="text-muted mt-2">
+                        Seeing files owned by other people here is the point: we are acting
+                        <em>as</em> the impersonated user, so anything shared with them is visible to
+                        us. A consumer <em>@gmail.com</em> account can never be impersonated - its
+                        files reach us only through what it shared with the subject.
+                    </div>
+                </div>
+
+                <footer>
+                    <button name="action_run_probes" type="object" string="Run Probes"
+                            class="btn-primary" invisible="state == 'result'"/>
+                    <button name="action_run_probes" type="object" string="Run Again"
+                            class="btn-secondary" invisible="state != 'result'"/>
+                    <button string="Close" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_gdrive_connection_test_wizard" model="ir.actions.act_window">
+        <field name="name">Test Connection</field>
+        <field name="res_model">gdrive.connection.test.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="view_id" ref="gdrive_connection_test_wizard_view_form"/>
+        <field name="target">new</field>
+    </record>
+
+</odoo>

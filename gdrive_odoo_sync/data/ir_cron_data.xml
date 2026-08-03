@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Scheduled actions (SPEC section 6).
+
+    ============================ ODOO 18 HARD RULES ============================
+    * NO <field name="numbercall"> and NO <field name="doall">. Both fields were
+      removed from ir.cron in Odoo 17/18. Their presence is not a warning: the
+      XML record fails to load and the whole module install aborts. This is the
+      single most common cause of "my Odoo 15 module will not install on 18".
+    * `state` is always `code`; `user_id` is always base.user_root.
+    * `model_id` uses the auto-generated `model_<name_with_underscores>` xml id,
+      which exists because the Python model was registered before any XML in the
+      `data` list was parsed.
+    ============================================================================
+
+    WHY noupdate="1"
+    ================
+    Intervals, `active` and `nextcall` are exactly the fields an administrator
+    tunes in production: pausing discovery during a Drive outage, stretching the
+    verify cron from daily to weekly on a large corpus. Without noupdate, every
+    `-u gdrive_odoo_sync` silently reverts all of it, and a cron somebody
+    deliberately disabled comes back on. Because of noupdate, changing an
+    interval here does not reach existing databases; that needs a migration or a
+    README note.
+
+    WHY nextcall is staggered
+    =========================
+    All seven crons would otherwise be created with nextcall = now and fire in
+    the same tick, on the same worker, against the same connection, where the
+    per-connection advisory lock means six of them immediately give up and
+    reschedule. Staggering them by a few minutes turns a thundering herd into a
+    pipeline: discover, then ingest what discovery found, then stage what ingest
+    fetched, then promote, then verify.
+
+    WHY the priorities ascend in pipeline order
+    ===========================================
+    Odoo's cron runner orders ready jobs by `priority` ascending. Discover (5)
+    must beat verify (9), because verifying a stale mirror produces confident,
+    well-formatted, wrong answers.
+
+    BEHAVIOURAL CONTRACT every method below must honour (SPEC section 6),
+    restated here because it is invisible from the XML:
+      * No cron method may raise. Odoo 18 auto-deactivates a scheduled action
+        after repeated failures, so one bad spreadsheet would silently switch
+        off the whole sync. Per-entity exceptions are caught, logged as a
+        gdrive.sync.run.line at level `error`, and the run ends `partial`.
+      * Each method is a batch driver with a wall-clock budget
+        (_CRON_BUDGET_SEC = 600), commits at 200-record boundaries, and calls
+        `_trigger()` on its own cron when the budget expires with work left, so
+        a backlog drains in minutes rather than one interval at a time.
+      * Each takes a per-connection pg_try_advisory_xact_lock and returns
+        immediately if it cannot, making overlapping runs structurally
+        impossible.
+-->
+<odoo>
+  <data noupdate="1">
+
+    <!-- 1/7. Incremental discovery. Replays each gdrive.change.cursor through
+         the Drive Changes API. 15 minutes is the shortest interval that is
+         still cheap: a delta poll costs one request per drive when nothing
+         changed. -->
+    <record id="ir_cron_gdrive_discover" model="ir.cron">
+      <field name="name">GDrive Sync: Discover (delta)</field>
+      <field name="model_id" ref="model_gdrive_connection"/>
+      <field name="state">code</field>
+      <field name="code">model._cron_discover()</field>
+      <field name="interval_number">15</field>
+      <field name="interval_type">minutes</field>
+      <field name="active" eval="True"/>
+      <field name="user_id" ref="base.user_root"/>
+      <field name="priority">5</field>
+      <field name="nextcall" eval="(DateTime.now() + timedelta(minutes=5)).strftime('%Y-%m-%d %H:%M:%S')"/>
+    </record>
+
+    <!-- 2/7. Fetch bytes for nodes discovery has queued, and mirror them into
+         ir.attachment. Slower than discovery on purpose: this is the stage that
+         moves megabytes, and it is the one most likely to hit
+         exportSizeLimitExceeded or a download quota. -->
+    <record id="ir_cron_gdrive_ingest" model="ir.cron">
+      <field name="name">GDrive Sync: Ingest queued nodes</field>
+      <field name="model_id" ref="model_gdrive_node"/>
+      <field name="state">code</field>
+      <field name="code">model._cron_ingest()</field>
+      <field name="interval_number">30</field>
+      <field name="interval_type">minutes</field>
+      <field name="active" eval="True"/>
+      <field name="user_id" ref="base.user_root"/>
+      <field name="priority">6</field>
+      <field name="nextcall" eval="(DateTime.now() + timedelta(minutes=10)).strftime('%Y-%m-%d %H:%M:%S')"/>
+    </record>
+
+    <!-- 3/7. Read every GRID tab of every changed spreadsheet and land its rows
+         in gdrive.staged.row. Hourly rather than every 15 minutes because a
+         Sheets read costs a slot in a 60-reads-per-minute-per-user budget that
+         the whole Workspace shares. -->
+    <record id="ir_cron_gdrive_stage" model="ir.cron">
+      <field name="name">GDrive Sync: Stage spreadsheet tabs</field>
+      <field name="model_id" ref="model_gdrive_dataset"/>
+      <field name="state">code</field>
+      <field name="code">model._cron_stage()</field>
+      <field name="interval_number">1</field>
+      <field name="interval_type">hours</field>
+      <field name="active" eval="True"/>
+      <field name="user_id" ref="base.user_root"/>
+      <field name="priority">7</field>
+      <field name="nextcall" eval="(DateTime.now() + timedelta(minutes=20)).strftime('%Y-%m-%d %H:%M:%S')"/>
+    </record>
+
+    <!-- 4/7. Promote staged rows into business models. This is a NO-OP for
+         every dataset whose mapping is absent, disabled, or not in state
+         `active`, which is every dataset until a human deliberately opts in.
+         Shipping this cron enabled is therefore safe: with no enabled mapping
+         it does nothing but log that it found nothing to do. -->
+    <record id="ir_cron_gdrive_promote" model="ir.cron">
+      <field name="name">GDrive Sync: Promote mapped datasets</field>
+      <field name="model_id" ref="model_gdrive_mapping"/>
+      <field name="state">code</field>
+      <field name="code">model._cron_promote()</field>
+      <field name="interval_number">1</field>
+      <field name="interval_type">hours</field>
+      <field name="active" eval="True"/>
+      <field name="user_id" ref="base.user_root"/>
+      <field name="priority">8</field>
+      <field name="nextcall" eval="(DateTime.now() + timedelta(minutes=35)).strftime('%Y-%m-%d %H:%M:%S')"/>
+    </record>
+
+    <!-- 5/7. Compare both sides by content hash and record drift. Daily,
+         because the L0/L0b fast paths make an unchanged dataset almost free but
+         a genuine L1 comparison costs a full Sheets read of the workbook.
+         Healing is NOT part of this cron: verification is read-only unless a
+         mapping has auto_heal explicitly enabled. -->
+    <record id="ir_cron_gdrive_verify" model="ir.cron">
+      <field name="name">GDrive Sync: Verify &amp; report</field>
+      <field name="model_id" ref="model_gdrive_dataset"/>
+      <field name="state">code</field>
+      <field name="code">model._cron_verify()</field>
+      <field name="interval_number">1</field>
+      <field name="interval_type">days</field>
+      <field name="active" eval="True"/>
+      <field name="user_id" ref="base.user_root"/>
+      <field name="priority">9</field>
+      <field name="nextcall" eval="(DateTime.now() + timedelta(hours=2)).strftime('%Y-%m-%d %H:%M:%S')"/>
+    </record>
+
+    <!-- 6/7. Weekly full recompute. Sets full_resync_requested and clears every
+         cached hash so the next verify pass rebuilds from scratch.
+
+         WHY this exists even though the fast paths are correct: the fast paths
+         are an optimisation built on assumptions (that Drive's `version` always
+         increments, that write_date always moves, that spec_version always
+         changed when the normalizer did). The weekly full pass is what catches
+         the day one of those assumptions turns out to be false. A verification
+         system whose cache is never independently re-derived is a verification
+         system that can report `verified` forever without ever looking at the
+         data again. -->
+    <record id="ir_cron_gdrive_full_resync" model="ir.cron">
+      <field name="name">GDrive Sync: Weekly full recompute</field>
+      <field name="model_id" ref="model_gdrive_connection"/>
+      <field name="state">code</field>
+      <field name="code">model._cron_full_resync()</field>
+      <field name="interval_number">1</field>
+      <field name="interval_type">weeks</field>
+      <field name="active" eval="True"/>
+      <field name="user_id" ref="base.user_root"/>
+      <field name="priority">10</field>
+      <field name="nextcall" eval="(DateTime.now() + timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S')"/>
+    </record>
+
+    <!-- 7/7. Housekeeping: prune sync runs past run_retention_days, expire
+         plans past their expiry_date, and delete obsolete staged rows older
+         than 30 days. Lowest priority (20) so it never delays real work; it is
+         the only cron whose late execution costs nothing but disk. -->
+    <record id="ir_cron_gdrive_gc" model="ir.cron">
+      <field name="name">GDrive Sync: Housekeeping</field>
+      <field name="model_id" ref="model_gdrive_sync_run"/>
+      <field name="state">code</field>
+      <field name="code">model._cron_gc()</field>
+      <field name="interval_number">1</field>
+      <field name="interval_type">days</field>
+      <field name="active" eval="True"/>
+      <field name="user_id" ref="base.user_root"/>
+      <field name="priority">20</field>
+      <field name="nextcall" eval="(DateTime.now() + timedelta(hours=6)).strftime('%Y-%m-%d %H:%M:%S')"/>
+    </record>
+
+  </data>
+</odoo>

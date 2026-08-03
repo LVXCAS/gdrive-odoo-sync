@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Menu structure. Loads LAST in __manifest__.py's data list, because every
+    ir.ui.menu below references an ir.actions.act_window declared in one of the
+    view files above it. Reordering this entry breaks the install with a
+    "External ID not found" that points at the menu rather than at the cause.
+
+    WHY the ordering of the top-level entries
+    =========================================
+    The menu is ordered by the sequence an operator actually walks:
+
+        Overview      - "did the last run finish, and was the read complete?"
+        Drive Nodes   - "did we see the files we expect to see?"
+        Datasets      - "did every tab get read, and is any of them blocked?"
+        Staged Rows   - the staging product, complete in itself
+        Verifications - the comparison results
+        Drift         - the triage queue, the screen people live in
+        Plans         - proposed writes, awaiting a human
+        Configuration - the things you touch once and then leave alone
+
+    Drift sits above Plans deliberately. Report-first is the product's default
+    posture: a deployment with auto-heal off everywhere never opens the Plans
+    menu at all, and that is a complete, useful, non-mutating outcome.
+
+    Every menu carries a `groups` attribute. A user with no gdrive group has no
+    ACL row matching them and would see empty lists rather than a clean absence,
+    which reads as "the sync is broken" instead of "this is not yours".
+-->
+<odoo>
+
+    <menuitem id="menu_gdrive_root"
+              name="Google Drive Sync"
+              web_icon="gdrive_odoo_sync,static/description/icon.png"
+              sequence="95"
+              groups="gdrive_odoo_sync.group_gdrive_user"/>
+
+    <!-- ================================================================ Runs -->
+    <menuitem id="menu_gdrive_overview"
+              name="Overview"
+              parent="menu_gdrive_root"
+              action="action_gdrive_sync_run"
+              sequence="10"
+              groups="gdrive_odoo_sync.group_gdrive_user"/>
+
+    <!-- =============================================================== Mirror -->
+    <menuitem id="menu_gdrive_mirror"
+              name="Mirror"
+              parent="menu_gdrive_root"
+              sequence="20"
+              groups="gdrive_odoo_sync.group_gdrive_user"/>
+
+    <menuitem id="menu_gdrive_node"
+              name="Drive Nodes"
+              parent="menu_gdrive_mirror"
+              action="action_gdrive_node"
+              sequence="10"
+              groups="gdrive_odoo_sync.group_gdrive_user"/>
+
+    <menuitem id="menu_gdrive_dataset"
+              name="Datasets"
+              parent="menu_gdrive_mirror"
+              action="action_gdrive_dataset"
+              sequence="20"
+              groups="gdrive_odoo_sync.group_gdrive_user"/>
+
+    <menuitem id="menu_gdrive_staged_row"
+              name="Staged Rows"
+              parent="menu_gdrive_mirror"
+              action="action_gdrive_staged_row"
+              sequence="30"
+              groups="gdrive_odoo_sync.group_gdrive_user"/>
+
+    <!-- ========================================================= Verification -->
+    <menuitem id="menu_gdrive_verification_root"
+              name="Verification"
+              parent="menu_gdrive_root"
+              sequence="30"
+              groups="gdrive_odoo_sync.group_gdrive_user"/>
+
+    <menuitem id="menu_gdrive_verification"
+              name="Verifications"
+              parent="menu_gdrive_verification_root"
+              action="action_gdrive_verification"
+              sequence="10"
+              groups="gdrive_odoo_sync.group_gdrive_user"/>
+
+    <menuitem id="menu_gdrive_drift"
+              name="Drift"
+              parent="menu_gdrive_verification_root"
+              action="action_gdrive_drift"
+              sequence="20"
+              groups="gdrive_odoo_sync.group_gdrive_user"/>
+
+    <menuitem id="menu_gdrive_plan"
+              name="Plans"
+              parent="menu_gdrive_verification_root"
+              action="action_gdrive_plan"
+              sequence="30"
+              groups="gdrive_odoo_sync.group_gdrive_manager"/>
+
+    <!-- ======================================================== Configuration -->
+    <menuitem id="menu_gdrive_config"
+              name="Configuration"
+              parent="menu_gdrive_root"
+              sequence="90"
+              groups="gdrive_odoo_sync.group_gdrive_manager"/>
+
+    <menuitem id="menu_gdrive_connection"
+              name="Connections"
+              parent="menu_gdrive_config"
+              action="action_gdrive_connection"
+              sequence="10"
+              groups="gdrive_odoo_sync.group_gdrive_manager"/>
+
+    <menuitem id="menu_gdrive_mapping"
+              name="Mappings"
+              parent="menu_gdrive_config"
+              action="action_gdrive_mapping"
+              sequence="20"
+              groups="gdrive_odoo_sync.group_gdrive_manager"/>
+
+    <menuitem id="menu_gdrive_scope_rule"
+              name="Scope Rules"
+              parent="menu_gdrive_config"
+              action="action_gdrive_scope_rule"
+              sequence="30"
+              groups="gdrive_odoo_sync.group_gdrive_manager"/>
+
+    <menuitem id="menu_gdrive_settings"
+              name="Settings"
+              parent="menu_gdrive_config"
+              action="action_gdrive_config_settings"
+              sequence="90"
+              groups="base.group_system"/>
+
+</odoo>

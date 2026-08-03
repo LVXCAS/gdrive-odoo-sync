@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Non-secret default configuration (SPEC sections 2.5 and 7.4, FILE_MANIFEST
+    lane A).
+
+    ============================================================================
+    THE SERVICE-ACCOUNT KEY NEVER APPEARS IN THIS FILE, OR IN ANY DATA FILE.
+    ============================================================================
+
+    Reasons, all of them independent and all of them sufficient:
+
+      * Data files are committed to git. A JSON key in git is a leaked key, and
+        it is a bearer credential for the *entire Google Drive* of the
+        impersonated Workspace user. Rotating it means every environment breaks
+        at once.
+      * `ir_config_parameter` values appear in cleartext in Odoo.sh database
+        dumps, which anybody with project access can download. That is why SPEC
+        section 2.5 makes the environment variable GDRIVE_ODOO_SYNC_SA_KEY the
+        *preferred* source and ir.config_parameter only the fallback.
+      * A data file is reapplied on every upgrade, so a key seeded here would
+        silently overwrite whatever the administrator rotated to.
+
+    The key is entered through Settings (res.config.settings) with
+    password="True" and groups="base.group_system", or, better, set as a project
+    environment variable and never stored in the database at all.
+
+    ============================================================================
+    WHY noupdate="1"
+
+    These are *defaults*, i.e. starting points an administrator is expected to
+    tune. Without noupdate, `-u gdrive_odoo_sync` would stamp the shipped value
+    back over their tuning. The most damaging instance is sheets_reads_per_min:
+    an administrator who lowered it to 20 because they share the quota with
+    another integration would find it silently back at 50 after an upgrade, and
+    would then see the *other* integration start failing with 429s.
+
+    Consequence to be aware of: because of noupdate, changing a value here does
+    NOT propagate to existing databases. Shipping a new default requires either
+    a migration script or an explicit note in the upgrade section of README.md.
+-->
+<odoo>
+  <data noupdate="1">
+
+    <!-- The Workspace identity the service account impersonates by default.
+         Pre-filled on new gdrive.connection records so an administrator cannot
+         typo it. Not a secret: it is an email address, and domain-wide
+         delegation is what makes it usable, not knowledge of the string. -->
+    <record id="param_default_subject" model="ir.config_parameter">
+      <field name="key">gdrive_odoo_sync.default_subject</field>
+      <field name="value">lucaso@avatarnaturalfoods.com</field>
+    </record>
+
+    <!-- Client-side token bucket for the Sheets API. Google's hard ceiling is
+         60 read requests per minute per user; 50 leaves headroom for the Test
+         Connection wizard and any ad-hoc manual run to get through without
+         tripping the quota the crons are already consuming. Pacing up front is
+         strictly cheaper than backing off after a 429. -->
+    <record id="param_sheets_reads_per_min" model="ir.config_parameter">
+      <field name="key">gdrive_odoo_sync.sheets_reads_per_min</field>
+      <field name="value">50</field>
+    </record>
+
+    <!-- Client-side token bucket for the Drive API, in Google's "quota units"
+         per minute, against a documented 325 000/min/user ceiling. 200 000 is
+         deliberately conservative: the ceiling is shared with anything else
+         acting as this user, including the Drive web UI. -->
+    <record id="param_drive_units_per_min" model="ir.config_parameter">
+      <field name="key">gdrive_odoo_sync.drive_units_per_min</field>
+      <field name="value">200000</field>
+    </record>
+
+    <!-- How long gdrive.sync.run records (and their lines and log attachments)
+         are kept before _cron_gc prunes them. 90 days is chosen so a quarterly
+         audit can still see the run that produced a given verification. Raising
+         it grows the database; the gzipped JSONL log attachments are by far the
+         largest part. -->
+    <record id="param_run_retention_days" model="ir.config_parameter">
+      <field name="key">gdrive_odoo_sync.run_retention_days</field>
+      <field name="value">90</field>
+    </record>
+
+    <!-- How long a gdrive.plan stays applicable after it is generated. A plan
+         is a statement about a state of the world that was true when it was
+         computed; approving a day-old plan approves a diff that may no longer
+         exist. Apply additionally re-checks the fingerprints and refuses with
+         `refused_stale` if anything moved, so this is the outer bound, not the
+         only guard. -->
+    <record id="param_plan_expiry_hours" model="ir.config_parameter">
+      <field name="key">gdrive_odoo_sync.plan_expiry_hours</field>
+      <field name="value">24</field>
+    </record>
+
+  </data>
+</odoo>

@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    gdrive.mapping.builder.wizard - suggestions, and only suggestions.
+
+    WHY the wording on this dialog is defensive
+    ===========================================
+    The wizard reads the observed header schema of one tab and proposes a ctype
+    and an Odoo field per column. Those proposals are derived from what the data
+    *looks like*, and looking like something is precisely the evidence this
+    system refuses to act on anywhere else:
+
+      * a column of 1s and 0s looks boolean and may be a quantity;
+      * "007" looks numeric and is a SKU whose leading zeros are already gone if
+        anyone lets it be read as a number;
+      * "03/04/2026" is genuinely unresolvable and no parser can tell.
+
+    So the output of this wizard is a `gdrive.mapping` in state `draft` with
+    `enabled = False`. Nothing is promoted, nothing is written to a business
+    model, and a human must review every ctype and then deliberately enable the
+    mapping. `assert_string_value` is pre-ticked on identifier-looking headers
+    because that is the direction whose default failure is loud (a quarantined
+    row) rather than silent (a mangled barcode).
+-->
+<odoo>
+
+    <record id="gdrive_mapping_builder_wizard_view_form" model="ir.ui.view">
+        <field name="name">gdrive.mapping.builder.wizard.form</field>
+        <field name="model">gdrive.mapping.builder.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Build Promotion Mapping">
+                <div class="alert alert-warning" role="alert">
+                    <strong>Everything below is a suggestion.</strong>
+                    Creating the mapping does not promote anything: it is created in
+                    <em>draft</em> with promotion disabled. Review every column type, validate the
+                    mapping, and only then enable it.
+                </div>
+                <group>
+                    <group>
+                        <field name="dataset_id" readonly="1" options="{'no_open': True}"/>
+                        <field name="name" placeholder="e.g. Investor Directory to res.partner"/>
+                    </group>
+                    <group>
+                        <field name="target_model_id" options="{'no_create': True}"/>
+                    </group>
+                </group>
+                <field name="line_ids" nolabel="1">
+                    <list string="Column Suggestions" editable="bottom">
+                        <field name="sequence" widget="handle"/>
+                        <field name="dataset_column_id" column_invisible="1"/>
+                        <field name="header_canon" readonly="1"/>
+                        <field name="slug" readonly="1"/>
+                        <field name="ctype"/>
+                        <field name="odoo_field_id" options="{'no_create': True}"/>
+                        <field name="required"/>
+                        <field name="is_natural_key"/>
+                        <field name="assert_string_value"
+                               string="Identifier"
+                               help="Assert the cell really arrived as a string. Tick this on every SKU, barcode, invoice number, phone number, account number and postal code column: once such a value has been read as a number its leading zeros are gone and anything past ~15 significant digits is already mangled."/>
+                    </list>
+                </field>
+                <div class="text-muted mt-2">
+                    A column left without an Odoo field is treated as <em>ignore</em> - it stays in
+                    staging, keeps its slug, and contributes to the schema-growth hash rather than
+                    to the compared row hash. That is a perfectly good outcome; not every column
+                    belongs in a business model.
+                </div>
+                <footer>
+                    <button name="action_create_mapping" type="object"
+                            string="Create Mapping (disabled)" class="btn-primary"/>
+                    <button string="Cancel" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_gdrive_mapping_builder_wizard" model="ir.actions.act_window">
+        <field name="name">Build Mapping</field>
+        <field name="res_model">gdrive.mapping.builder.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="view_id" ref="gdrive_mapping_builder_wizard_view_form"/>
+        <field name="target">new</field>
+    </record>
+
+</odoo>

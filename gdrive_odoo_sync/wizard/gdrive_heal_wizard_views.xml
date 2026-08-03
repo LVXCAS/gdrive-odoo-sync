@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    gdrive.heal.wizard - the approval surface, and the only place a human turns
+    a report into a write.
+
+    WHY the Apply button is invisible while dry_run is on
+    ====================================================
+    Preview and apply call the *same* planner. If they had separate code paths
+    the preview would be a lie, so the only difference between them is whether
+    the resulting plan is executed. Making the operator explicitly untick
+    "dry run" is therefore a real decision point, not a formality: what they saw
+    in preview is exactly what will run.
+
+    Three further gates are enforced in Python, not here, because a hidden
+    button is a UI convenience and not a security control:
+
+      * `action_apply()` refuses unless the user is in group_gdrive_admin;
+      * it re-reads every fingerprint (drive version, drive modified time, Odoo
+        row count, max write_date, both dataset hashes, spec_version) and
+        refuses with `refused_stale` if any moved - which turns "someone edited
+        the sheet between preview and approval" from a corruption into a retry;
+      * it refuses a plan past its expiry.
+
+    Soft deletes deserve the loudest banner on this screen. A wrongly created
+    record is deleted in seconds; a wrongly deleted Odoo record takes its
+    journal entries, attachments, message threads and many2one back-references
+    with it. And deletes are inferred from *absence*, which is exactly what
+    every read failure looks like.
+-->
+<odoo>
+
+    <record id="gdrive_heal_wizard_view_form" model="ir.ui.view">
+        <field name="name">gdrive.heal.wizard.form</field>
+        <field name="model">gdrive.heal.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Heal from Google Drive">
+                <field name="state" invisible="1"/>
+
+                <!-- ============================================================ scope -->
+                <group>
+                    <group>
+                        <field name="plan_id" options="{'no_create': True}"
+                               readonly="state == 'applied'"/>
+                        <field name="dataset_ids" widget="many2many_tags"
+                               options="{'no_create': True}"
+                               invisible="plan_id or state != 'setup'"/>
+                    </group>
+                    <group>
+                        <field name="dry_run" widget="boolean_toggle"
+                               readonly="state == 'applied'"/>
+                    </group>
+                </group>
+                <div class="alert alert-info" role="alert" invisible="state != 'setup'">
+                    <strong>Preview is always safe.</strong>
+                    It recomputes the plan through the reconciler, which performs no ORM writes,
+                    no network calls and reads no ambient clock. Nothing in Odoo changes until
+                    you untick <em>Dry run</em> and press Apply.
+                </div>
+
+                <!-- ========================================================== preview -->
+                <div invisible="state == 'setup'">
+                    <div class="alert alert-warning" role="alert" invisible="not breaker_warning">
+                        <field name="breaker_warning" nolabel="1" readonly="1" widget="html"/>
+                    </div>
+                    <div class="alert alert-danger" role="alert" invisible="state != 'preview'">
+                        <strong>Read the soft-delete lines below before applying.</strong>
+                        A soft delete sets <code>active = False</code> and keeps
+                        <code>x_gdrive_sync_id</code>, so a restore is one flag flip - but deletes are
+                        inferred from absence, and absence is what a partial read, an expired token,
+                        a renamed tab and a wrong domain all look like. Untick any line you are not
+                        certain about. Hard delete is not available here, at any threshold, under
+                        any configuration.
+                    </div>
+                    <div class="alert alert-success" role="alert"
+                         invisible="state != 'applied'">
+                        Applied. Both dataset hashes were recomputed afterwards and asserted equal;
+                        a mismatch would have raised a <em>non-convergent</em> finding instead of
+                        silently re-applying the same change tomorrow night.
+                    </div>
+
+                    <group string="Summary">
+                        <field name="summary" nolabel="1" readonly="1"/>
+                    </group>
+
+                    <field name="line_ids" nolabel="1" readonly="state == 'applied'">
+                        <list string="Planned Actions" editable="bottom"
+                              decoration-danger="action_type == 'soft_delete'"
+                              decoration-warning="action_type == 'quarantine'"
+                              decoration-success="action_type == 'create'"
+                              decoration-muted="not selected">
+                            <field name="selected" widget="boolean_toggle"/>
+                            <field name="action_type"/>
+                            <field name="source_ref"/>
+                            <field name="description"/>
+                        </list>
+                    </field>
+                    <div class="text-muted mt-2">
+                        Execution order is fixed: write-back, then creates, then updates, then soft
+                        deletes, then quarantines. Deletes go last <em>and conditionally</em> - if
+                        anything earlier fails unexpectedly, every soft delete is skipped, because
+                        an error earlier in the run is evidence that our view of the world is
+                        incomplete.
+                    </div>
+                </div>
+
+                <footer>
+                    <button name="action_preview" type="object" string="Preview"
+                            class="btn-primary" invisible="state == 'applied'"/>
+                    <button name="action_apply" type="object" string="Apply"
+                            class="btn-danger"
+                            groups="gdrive_odoo_sync.group_gdrive_admin"
+                            invisible="state != 'preview' or dry_run"
+                            confirm="This writes to live business records. Fingerprints are re-checked immediately before execution and the plan is refused if the sheet or Odoo moved since the preview. Continue?"/>
+                    <button string="Close" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_gdrive_heal_wizard" model="ir.actions.act_window">
+        <field name="name">Heal from Drive</field>
+        <field name="res_model">gdrive.heal.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="view_id" ref="gdrive_heal_wizard_view_form"/>
+        <field name="target">new</field>
+    </record>
+
+</odoo>

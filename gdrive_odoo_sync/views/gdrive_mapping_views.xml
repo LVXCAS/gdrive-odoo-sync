@@ -1,0 +1,336 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    gdrive.mapping / gdrive.mapping.column views - the opt-in promotion contract.
+
+    WHY `enabled` and `auto_heal` carry loud warning text: everything else in this
+    module is non-mutating. These two booleans are the only place where reading a
+    spreadsheet turns into writing business records, and both ship False. A user
+    who flips them must have read a sentence explaining what changes.
+
+    WHY the column list exposes `authority` and `assert_string_value` prominently:
+    exactly one authority per column is what keeps the write direction unambiguous,
+    and `assert_string_value` is the only defence against a SKU, barcode, invoice
+    number or postal code arriving as an IEEE-754 double with its leading zeros
+    already gone.
+-->
+<odoo>
+
+    <record id="gdrive_mapping_view_search" model="ir.ui.view">
+        <field name="name">gdrive.mapping.search</field>
+        <field name="model">gdrive.mapping</field>
+        <field name="arch" type="xml">
+            <search string="Mappings">
+                <field name="name"/>
+                <field name="dataset_id"/>
+                <field name="target_model_id"/>
+                <separator/>
+                <filter name="filter_enabled" string="Enabled" domain="[('enabled', '=', True)]"/>
+                <filter name="filter_disabled" string="Disabled" domain="[('enabled', '=', False)]"/>
+                <filter name="filter_active_state" string="Active Contract" domain="[('state', '=', 'active')]"/>
+                <filter name="filter_draft" string="Draft" domain="[('state', '=', 'draft')]"/>
+                <filter name="filter_blocked" string="Blocked" domain="[('state', '=', 'blocked')]"/>
+                <separator/>
+                <filter name="filter_autoheal" string="Auto-heal On" domain="[('auto_heal', '=', True)]"/>
+                <filter name="filter_deletes" string="Soft Delete Allowed" domain="[('delete_policy', '=', 'soft')]"/>
+                <separator/>
+                <filter name="filter_inactive" string="Archived" domain="[('active', '=', False)]"/>
+                <group expand="0" string="Group By">
+                    <filter name="group_target_model" string="Target Model" context="{'group_by': 'target_model_id'}"/>
+                    <filter name="group_state" string="Status" context="{'group_by': 'state'}"/>
+                    <filter name="group_delete_policy" string="Delete Policy" context="{'group_by': 'delete_policy'}"/>
+                    <filter name="group_identity" string="Identity Strategy" context="{'group_by': 'identity_strategy'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="gdrive_mapping_view_list" model="ir.ui.view">
+        <field name="name">gdrive.mapping.list</field>
+        <field name="model">gdrive.mapping</field>
+        <field name="arch" type="xml">
+            <list string="Mappings"
+                  decoration-danger="state == 'blocked'"
+                  decoration-success="state == 'active' and enabled"
+                  decoration-muted="not enabled">
+                <field name="name"/>
+                <field name="dataset_id"/>
+                <field name="target_model_id"/>
+                <field name="identity_strategy" optional="show"/>
+                <field name="delete_policy" optional="show"/>
+                <field name="enabled" widget="boolean_toggle"/>
+                <field name="auto_heal" widget="boolean_toggle" optional="show"/>
+                <field name="spec_version" optional="hide"/>
+                <field name="state" widget="badge"
+                       decoration-success="state == 'active'"
+                       decoration-danger="state == 'blocked'"
+                       decoration-muted="state == 'draft'"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="gdrive_mapping_view_form" model="ir.ui.view">
+        <field name="name">gdrive.mapping.form</field>
+        <field name="model">gdrive.mapping</field>
+        <field name="arch" type="xml">
+            <form string="Promotion Mapping">
+                <header>
+                    <button name="action_validate" type="object" string="Validate"
+                            class="btn-primary"
+                            groups="gdrive_odoo_sync.group_gdrive_manager"
+                            help="Checks every mapped header still resolves, every Odoo field is writable, every selection value exists, every money column resolves a currency, and creates the technical id fields on the target model."/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,validated,active"/>
+                </header>
+                <sheet>
+                    <widget name="web_ribbon" title="Disabled" bg_color="text-bg-warning"
+                            invisible="enabled"/>
+                    <div class="oe_title">
+                        <label for="name"/>
+                        <h1><field name="name" placeholder="Wholesale Leads -> res.partner"/></h1>
+                    </div>
+                    <div class="alert alert-warning" role="alert" invisible="not validation_message">
+                        <strong>Validation output</strong>
+                        <field name="validation_message" readonly="1" nolabel="1"/>
+                    </div>
+                    <group>
+                        <group string="Source and Target">
+                            <field name="dataset_id"/>
+                            <field name="target_model_id"/>
+                            <field name="target_model" readonly="1"/>
+                            <field name="domain" widget="char"
+                                   help="Extra scope on the target model. Records outside it are never considered owned by this mapping."/>
+                            <field name="active" widget="boolean_toggle"/>
+                        </group>
+                        <group string="Identity">
+                            <field name="identity_strategy"/>
+                            <field name="sync_id_column_header"
+                                   invisible="identity_strategy == 'natural_key'"/>
+                            <field name="writeback_sync_id" readonly="1"
+                                   help="Permanently unavailable in v1: writing an id back into the sheet needs Drive write scope, which this module structurally never obtains."/>
+                            <field name="spec_version" readonly="1"/>
+                        </group>
+                    </group>
+                    <div class="alert alert-danger" role="alert">
+                        <h4 class="alert-heading">Promotion is opt-in, and these two switches are the opt-in</h4>
+                        <div class="row">
+                            <div class="col-lg-6">
+                                <field name="enabled" widget="boolean_toggle"/>
+                                <label for="enabled" string="Enabled"/>
+                                <div class="text-muted">
+                                    While this is off, rows stay in staging and no business record is ever
+                                    touched. That is a complete, correct outcome for most datasets.
+                                </div>
+                            </div>
+                            <div class="col-lg-6">
+                                <field name="auto_heal" widget="boolean_toggle"/>
+                                <label for="auto_heal" string="Auto-heal"/>
+                                <div class="text-muted">
+                                    Ships off. Even when on, a soft delete above threshold still waits for a
+                                    human. Read the drift reports for at least a week before turning it on.
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <notebook>
+                        <page string="Columns" name="columns">
+                            <field name="column_ids" nolabel="1">
+                                <list string="Column Contract" editable="bottom" default_order="sequence asc, id asc">
+                                    <field name="sequence" widget="handle"/>
+                                    <field name="dataset_column_id"/>
+                                    <field name="header_canon"/>
+                                    <field name="odoo_field_id"/>
+                                    <field name="odoo_field" optional="hide"/>
+                                    <field name="ctype"/>
+                                    <field name="required"/>
+                                    <field name="is_natural_key"/>
+                                    <field name="authority"/>
+                                    <field name="assert_string_value" string="Identifier"/>
+                                    <field name="scale" optional="hide"/>
+                                    <field name="decimal_sep" optional="hide"/>
+                                    <field name="group_sep" optional="hide"/>
+                                    <field name="date_formats" optional="hide"/>
+                                    <field name="comodel" optional="hide"/>
+                                </list>
+                            </field>
+                            <div class="text-muted mt-2">
+                                Rows hash by <em>odoo_field</em> and columns resolve by
+                                <em>header_canon</em>, which together make a physical column reorder in the
+                                spreadsheet a no-op and a cosmetic header rename harmless.
+                            </div>
+                        </page>
+                        <page string="Write Policy" name="policy">
+                            <group>
+                                <group string="Allowed Operations">
+                                    <field name="create_allowed"/>
+                                    <field name="update_allowed"/>
+                                    <field name="delete_policy"/>
+                                    <field name="soft_delete_field" invisible="delete_policy != 'soft'"/>
+                                    <field name="dry_run_default"/>
+                                </group>
+                                <group string="Circuit Breakers">
+                                    <field name="create_threshold_abs"/>
+                                    <field name="create_threshold_pct"/>
+                                    <field name="delete_threshold_abs"/>
+                                    <field name="delete_threshold_pct"/>
+                                </group>
+                            </group>
+                            <group>
+                                <group string="Delete Quarantine Clock">
+                                    <field name="quarantine_runs"/>
+                                    <field name="quarantine_hours"/>
+                                </group>
+                                <group string="Convergence">
+                                    <field name="flap_limit"
+                                           help="Consecutive runs writing the same (sync_id, field) before the field is declared non-convergent and stops being written."/>
+                                </group>
+                            </group>
+                            <div class="alert alert-info" role="alert">
+                                Hard delete is never available to any automated path, at any threshold, under
+                                any configuration. A <em>soft</em> delete only sets the archive flag, keeps
+                                the technical sync id, and is reversible with one click.
+                            </div>
+                        </page>
+                        <page string="Promotion Links" name="links">
+                            <field name="promotion_link_ids" nolabel="1" readonly="1">
+                                <list string="Promotion Links"
+                                      decoration-danger="state == 'non_convergent'"
+                                      decoration-warning="state == 'missing' or state == 'quarantined'"
+                                      decoration-muted="state == 'soft_deleted' or state == 'unmanaged'">
+                                    <field name="sync_id"/>
+                                    <field name="natural_key"/>
+                                    <field name="res_model"/>
+                                    <field name="res_id"/>
+                                    <field name="last_promoted_date"/>
+                                    <field name="last_seen_in_sheet_date"/>
+                                    <field name="missing_since"/>
+                                    <field name="missing_run_count"/>
+                                    <field name="state" widget="badge"/>
+                                </list>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+    <record id="gdrive_mapping_column_view_form" model="ir.ui.view">
+        <field name="name">gdrive.mapping.column.form</field>
+        <field name="model">gdrive.mapping.column</field>
+        <field name="arch" type="xml">
+            <form string="Column Contract">
+                <sheet>
+                    <group>
+                        <group string="Binding">
+                            <field name="mapping_id"/>
+                            <field name="sequence"/>
+                            <field name="dataset_column_id"/>
+                            <field name="header_canon"/>
+                            <field name="odoo_field_id"/>
+                            <field name="odoo_field" readonly="1"/>
+                        </group>
+                        <group string="Contract">
+                            <field name="ctype"/>
+                            <field name="required"/>
+                            <field name="is_natural_key"/>
+                            <field name="authority"/>
+                            <field name="empty_is_null"/>
+                            <field name="assert_string_value"
+                                   help="Set True on every SKU, barcode, invoice number, phone number, account number and postal code column. A number arriving where an identifier was declared is refused, never silently repaired."/>
+                        </group>
+                    </group>
+                    <group string="Text options" invisible="ctype != 'text'">
+                        <group>
+                            <field name="text_trim"/>
+                            <field name="text_collapse_ws"
+                                   help="Leave on for names and labels. Turn it off for notes, code and address blocks, where runs of spaces are meaningful."/>
+                        </group>
+                        <group>
+                            <field name="text_case"/>
+                            <field name="fold_punct"
+                                   help="Affects the cosmetic hash only, never the strict one - folding smart quotes in the primary form would hide real edits."/>
+                        </group>
+                    </group>
+                    <group string="Number options" invisible="ctype not in ['number', 'money']">
+                        <group>
+                            <field name="decimal_sep"
+                                   help="Declared, never guessed. '1.234' is 1234 in de-DE and 1.234 in en-US and no heuristic can tell."/>
+                            <field name="group_sep"/>
+                            <field name="accounting_negatives"/>
+                            <field name="percent_mode"/>
+                        </group>
+                        <group>
+                            <field name="scale_mode"/>
+                            <field name="scale" invisible="scale_mode != 'fixed'"/>
+                            <field name="currency_field_id" invisible="ctype != 'money'"/>
+                            <field name="default_currency_id" invisible="ctype != 'money'"/>
+                            <field name="rel_tol"/>
+                            <field name="abs_tol"/>
+                        </group>
+                    </group>
+                    <group string="Date options" invisible="ctype not in ['date', 'datetime']">
+                        <field name="date_formats"
+                               help="Strict strptime patterns, tried in order. No fuzzy parsing, ever: '03/04/2026' is genuinely unresolvable and a guesser would silently corrupt a year of data."/>
+                    </group>
+                    <group string="Boolean options" invisible="ctype != 'bool'">
+                        <group>
+                            <field name="truthy"/>
+                            <field name="falsy"/>
+                        </group>
+                        <group>
+                            <field name="empty_means"/>
+                        </group>
+                    </group>
+                    <group string="Relational options" invisible="ctype not in ['many2one', 'm2m']">
+                        <group>
+                            <field name="comodel"/>
+                            <field name="m2o_match_field"/>
+                        </group>
+                        <group>
+                            <field name="m2o_create_missing"
+                                   help="Off by default. An unresolvable reference becomes an ORPHAN_REFERENCE quarantine rather than an invented record."/>
+                        </group>
+                    </group>
+                    <div class="text-muted" invisible="ctype != 'selection'">
+                        Selection columns compare Odoo technical keys, never labels. The sheet-label to
+                        technical-key map is validated against the target field at mapping validation time,
+                        so a new Odoo state fails loudly there instead of drifting silently at run time.
+                    </div>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="gdrive_mapping_column_view_list" model="ir.ui.view">
+        <field name="name">gdrive.mapping.column.list</field>
+        <field name="model">gdrive.mapping.column</field>
+        <field name="arch" type="xml">
+            <list string="Column Contracts" default_order="mapping_id, sequence asc, id asc">
+                <field name="mapping_id"/>
+                <field name="sequence"/>
+                <field name="header_canon"/>
+                <field name="odoo_field"/>
+                <field name="ctype"/>
+                <field name="required"/>
+                <field name="is_natural_key"/>
+                <field name="authority"/>
+                <field name="assert_string_value"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="action_gdrive_mapping" model="ir.actions.act_window">
+        <field name="name">Mappings</field>
+        <field name="res_model">gdrive.mapping</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="gdrive_mapping_view_search"/>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">No promotion mapping yet</p>
+            <p>
+                Open a dataset and press <em>Build Mapping</em>. Mappings are authored by a human,
+                never guessed, and nothing is promoted until one is deliberately enabled.
+            </p>
+        </field>
+    </record>
+
+</odoo>

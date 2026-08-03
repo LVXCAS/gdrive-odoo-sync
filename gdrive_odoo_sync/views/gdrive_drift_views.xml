@@ -1,0 +1,224 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    gdrive.drift views - the triage surface.
+
+    This is the screen a human actually lives in, so it is built around the three
+    questions asked in order when a report lands:
+
+      1. "Is anything on fire?"      -> severity decorations, and a default filter
+                                        that shows only OPEN findings sorted with
+                                        blocking/critical first.
+      2. "Where is it?"              -> group by dataset, then by drift type; every
+                                        row carries its A1 reference and a deep link
+                                        back into Google Drive.
+      3. "What actually differs?"    -> canon_sheet and canon_odoo side by side,
+                                        verbatim tagged tokens, never re-rendered.
+                                        Debuggability depends on those two strings
+                                        being shown exactly as hashed.
+
+    The category filters exist because the three counts are disjoint by design:
+    a `data_quality` finding means "I could not read this cell", which is a
+    different problem from `drift` ("the two sides genuinely disagree") and from
+    `structural` ("the shape of the sheet changed"). Conflating them is how a
+    dashboard ends up claiming twelve differences when it actually had twelve
+    unreadable cells.
+-->
+<odoo>
+
+    <record id="gdrive_drift_view_search" model="ir.ui.view">
+        <field name="name">gdrive.drift.search</field>
+        <field name="model">gdrive.drift</field>
+        <field name="arch" type="xml">
+            <search string="Drift Findings">
+                <field name="message" string="Message"/>
+                <field name="field_name"/>
+                <field name="sync_id"/>
+                <field name="natural_key"/>
+                <field name="source_ref"/>
+                <field name="dataset_id"/>
+                <field name="mapping_id"/>
+                <field name="verification_id"/>
+
+                <filter name="filter_open" string="Open" domain="[('resolution', '=', 'open')]"/>
+                <filter name="filter_planned" string="Planned" domain="[('resolution', '=', 'planned')]"/>
+                <filter name="filter_applied" string="Applied" domain="[('resolution', '=', 'applied')]"/>
+                <filter name="filter_ignored" string="Ignored" domain="[('resolution', '=', 'ignored')]"/>
+                <separator/>
+
+                <filter name="filter_blocking" string="Blocking" domain="[('severity', '=', 'blocking')]"
+                        help="Halts the dataset. Nothing is staged or promoted until it is resolved."/>
+                <filter name="filter_critical" string="Critical" domain="[('severity', '=', 'critical')]"/>
+                <filter name="filter_warning" string="Warning" domain="[('severity', '=', 'warning')]"/>
+                <filter name="filter_info" string="Info" domain="[('severity', '=', 'info')]"/>
+                <separator/>
+
+                <filter name="filter_cat_drift" string="Real Differences" domain="[('category', '=', 'drift')]"/>
+                <filter name="filter_cat_dq" string="Data Quality" domain="[('category', '=', 'data_quality')]"
+                        help="Cells that could not be read or identities that could not be resolved. Never counted as drift."/>
+                <filter name="filter_cat_structural" string="Structural" domain="[('category', '=', 'structural')]"
+                        help="Header, tab or access changes - the shape of the source moved."/>
+                <separator/>
+
+                <filter name="filter_missing_in_odoo" string="Missing in Odoo" domain="[('drift_type', '=', 'missing_in_odoo')]"/>
+                <filter name="filter_missing_in_sheet" string="Missing in Sheet" domain="[('drift_type', '=', 'missing_in_sheet')]"/>
+                <filter name="filter_field_mismatch" string="Field Mismatch" domain="[('drift_type', '=', 'field_mismatch')]"/>
+                <filter name="filter_header_change" string="Header Change" domain="[('drift_type', '=', 'header_change')]"/>
+                <filter name="filter_unmanaged" string="Unmanaged Records" domain="[('drift_type', '=', 'unmanaged_record')]"
+                        help="Records a human created directly in Odoo. Reported, never touched."/>
+                <filter name="filter_non_convergent" string="Non-convergent" domain="[('drift_type', '=', 'non_convergent')]"
+                        help="A field the writer keeps rewriting because it does not round-trip. The normalizer is asymmetric."/>
+                <separator/>
+
+                <filter name="filter_substantive" string="Substantive Only" domain="[('delta_class', '=', 'substantive')]"
+                        help="Excludes cosmetic and rounding differences, which are reported but never auto-written."/>
+                <filter name="filter_cosmetic" string="Cosmetic" domain="[('delta_class', '=', 'cosmetic')]"/>
+                <filter name="filter_rounding" string="Rounding" domain="[('delta_class', '=', 'rounding')]"/>
+
+                <group expand="1" string="Group By">
+                    <filter name="group_dataset" string="Dataset" context="{'group_by': 'dataset_id'}"/>
+                    <filter name="group_drift_type" string="Drift Type" context="{'group_by': 'drift_type'}"/>
+                    <filter name="group_severity" string="Severity" context="{'group_by': 'severity'}"/>
+                    <filter name="group_category" string="Category" context="{'group_by': 'category'}"/>
+                    <filter name="group_delta_class" string="Delta Class" context="{'group_by': 'delta_class'}"/>
+                    <filter name="group_field" string="Field" context="{'group_by': 'field_name'}"/>
+                    <filter name="group_resolution" string="Resolution" context="{'group_by': 'resolution'}"/>
+                    <filter name="group_mapping" string="Mapping" context="{'group_by': 'mapping_id'}"/>
+                    <filter name="group_verification" string="Verification" context="{'group_by': 'verification_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="gdrive_drift_view_list" model="ir.ui.view">
+        <field name="name">gdrive.drift.list</field>
+        <field name="model">gdrive.drift</field>
+        <field name="arch" type="xml">
+            <list string="Drift Findings"
+                  decoration-bf="severity == 'blocking'"
+                  decoration-danger="severity == 'blocking' or severity == 'critical'"
+                  decoration-warning="severity == 'warning'"
+                  decoration-info="category == 'data_quality'"
+                  decoration-muted="resolution == 'ignored' or resolution == 'resolved_externally' or severity == 'info'"
+                  decoration-it="resolution == 'planned' or resolution == 'applied'">
+                <field name="dataset_id" optional="show"/>
+                <field name="category"/>
+                <field name="drift_type"/>
+                <field name="severity" widget="badge"
+                       decoration-danger="severity == 'blocking' or severity == 'critical'"
+                       decoration-warning="severity == 'warning'"
+                       decoration-muted="severity == 'info'"/>
+                <field name="delta_class" optional="show"/>
+                <field name="field_name" optional="show"/>
+                <field name="canon_sheet" string="Sheet says" optional="show"/>
+                <field name="canon_odoo" string="Odoo says" optional="show"/>
+                <field name="source_ref" string="Cell" optional="show"/>
+                <field name="sync_id" optional="hide"/>
+                <field name="natural_key" optional="hide"/>
+                <field name="res_model" optional="hide"/>
+                <field name="res_id" optional="hide"/>
+                <field name="message" optional="hide"/>
+                <field name="mapping_id" optional="hide"/>
+                <field name="verification_id" optional="hide"/>
+                <field name="plan_action_id" optional="hide"/>
+                <field name="resolution" widget="badge"
+                       decoration-warning="resolution == 'open'"
+                       decoration-info="resolution == 'planned'"
+                       decoration-success="resolution == 'applied' or resolution == 'resolved_externally'"
+                       decoration-muted="resolution == 'ignored'"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="gdrive_drift_view_form" model="ir.ui.view">
+        <field name="name">gdrive.drift.form</field>
+        <field name="model">gdrive.drift</field>
+        <field name="arch" type="xml">
+            <form string="Drift Finding">
+                <sheet>
+                    <div class="oe_title">
+                        <h1>
+                            <field name="drift_type" readonly="1" class="oe_inline"/>
+                        </h1>
+                        <h3>
+                            <field name="severity" readonly="1" class="oe_inline"/>
+                            &#8226;
+                            <field name="category" readonly="1" class="oe_inline"/>
+                        </h3>
+                    </div>
+
+                    <div class="alert alert-danger" role="alert" invisible="severity != 'blocking'">
+                        This finding halts its dataset. Nothing is staged and nothing is promoted from
+                        that tab until the underlying structural problem is fixed in Drive or the
+                        mapping is corrected. That is deliberate: reading an absent mapped column as
+                        empty cells would write NULL over an entire Odoo column.
+                    </div>
+                    <div class="alert alert-info" role="alert"
+                         invisible="delta_class not in ['cosmetic', 'rounding']">
+                        Classified as
+                        <field name="delta_class" readonly="1" nolabel="1" class="oe_inline"/>.
+                        Reported but never auto-written: writing a cosmetic or rounding difference makes
+                        the value flap between runs forever without ever converging.
+                    </div>
+
+                    <group>
+                        <group string="Where">
+                            <field name="verification_id" readonly="1"/>
+                            <field name="dataset_id" readonly="1"/>
+                            <field name="mapping_id" readonly="1"/>
+                            <field name="source_ref" readonly="1" string="A1 Reference"/>
+                        </group>
+                        <group string="Which Record">
+                            <field name="sync_id" readonly="1"/>
+                            <field name="natural_key" readonly="1"/>
+                            <field name="staged_row_id" readonly="1"/>
+                            <field name="res_model" readonly="1"/>
+                            <field name="res_id" readonly="1"/>
+                            <field name="field_name" readonly="1"/>
+                        </group>
+                    </group>
+
+                    <group string="Canonical Forms (verbatim, exactly as hashed)">
+                        <group string="Sheet">
+                            <field name="canon_sheet" readonly="1" nolabel="1"/>
+                        </group>
+                        <group string="Odoo">
+                            <field name="canon_odoo" readonly="1" nolabel="1"/>
+                        </group>
+                    </group>
+                    <div class="text-muted">
+                        The prefix before the colon is the type tag. Two values with different tags are
+                        never equal, and an <code>e:</code> token is never equal to anything - including
+                        an identical <code>e:</code> token. Errors do not compare; they quarantine.
+                    </div>
+
+                    <group string="Message">
+                        <field name="message" readonly="1" nolabel="1"/>
+                    </group>
+
+                    <group>
+                        <group string="Triage">
+                            <field name="resolution"/>
+                            <field name="plan_action_id" readonly="1"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_gdrive_drift" model="ir.actions.act_window">
+        <field name="name">Drift</field>
+        <field name="res_model">gdrive.drift</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="gdrive_drift_view_search"/>
+        <field name="context">{'search_default_filter_open': 1, 'search_default_group_dataset': 1, 'search_default_group_drift_type': 2}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">No open drift</p>
+            <p>
+                Every difference between a spreadsheet tab and the Odoo records promoted from it
+                lands here, with both canonical forms and the exact cell that produced it.
+            </p>
+        </field>
+    </record>
+
+</odoo>

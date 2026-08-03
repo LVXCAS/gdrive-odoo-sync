@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Record rules for gdrive_odoo_sync (SPEC section 7.3).
+
+    Exactly five rules ship, all of them the same multi-company rule, and
+    nothing else. That restraint is deliberate; both halves of it are.
+
+    WHY these five are GLOBAL rules (empty `groups`)
+    ===============================================
+    A rule with no groups is a *global* rule. Odoo ANDs global rules with
+    everything else, and, critically, a group rule can never widen a global
+    rule. That is exactly the semantics multi-company isolation needs: there
+    must be no group you can be added to that lets you read another company's
+    Drive mirror. If these were group rules they would be ORed together with
+    every other group rule the user holds, and a user in two groups would see
+    the union, i.e. everything.
+
+    WHY nothing else is shipped
+    ===========================
+    The same property that makes a global rule right for multi-company makes it
+    dangerous everywhere else: it cannot be relaxed later without editing this
+    file. A well-meaning global rule added "for convenience" (say, restricting
+    gdrive.node to its creator) is unremovable by configuration and will
+    eventually lock an administrator out of the data they are on call for.
+    Access in this module is expressed through the three-group hierarchy in
+    gdrive_security.xml and through ir.model.access.csv, both of which an
+    administrator can reason about and change from the UI.
+
+    There are deliberately NO ownership ("only records you created") rules.
+    This is an administrative tool: a mirror of a shared Drive corpus has no
+    meaningful per-user owner.
+
+    Domain
+    ======
+        ['|', ('company_id','=',False), ('company_id','in',company_ids)]
+
+    The ('company_id','=',False) branch is not optional. Company-less records
+    are legitimate here (a connection created before multi-company was enabled,
+    a run logged by a cron whose company context was empty). Without that branch
+    they become invisible to every non-superuser, which looks exactly like data
+    loss.
+
+    `company_ids` is the Odoo 18 allowed-companies context list, i.e. the
+    companies the user has *ticked in the company switcher*, not `company_id`.
+    Using the singular would hide records from a user legitimately working
+    across two companies at once.
+
+    NOTE for lane D: every model listed below must therefore carry a stored
+    `company_id`. On gdrive.node / gdrive.dataset / gdrive.staged.row /
+    gdrive.sync.run the natural implementation is
+    `related='connection_id.company_id', store=True`, which keeps a single
+    source of truth on gdrive.connection.
+-->
+<odoo>
+
+    <record id="gdrive_connection_company_rule" model="ir.rule">
+        <field name="name">Google Drive connection: multi-company</field>
+        <field name="model_id" ref="model_gdrive_connection"/>
+        <field name="global" eval="True"/>
+        <field name="domain_force">['|', ('company_id', '=', False), ('company_id', 'in', company_ids)]</field>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="True"/>
+        <field name="perm_unlink" eval="True"/>
+    </record>
+
+    <record id="gdrive_node_company_rule" model="ir.rule">
+        <field name="name">Google Drive node: multi-company</field>
+        <field name="model_id" ref="model_gdrive_node"/>
+        <field name="global" eval="True"/>
+        <field name="domain_force">['|', ('company_id', '=', False), ('company_id', 'in', company_ids)]</field>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="True"/>
+        <field name="perm_unlink" eval="True"/>
+    </record>
+
+    <record id="gdrive_dataset_company_rule" model="ir.rule">
+        <field name="name">Google Drive dataset: multi-company</field>
+        <field name="model_id" ref="model_gdrive_dataset"/>
+        <field name="global" eval="True"/>
+        <field name="domain_force">['|', ('company_id', '=', False), ('company_id', 'in', company_ids)]</field>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="True"/>
+        <field name="perm_unlink" eval="True"/>
+    </record>
+
+    <record id="gdrive_staged_row_company_rule" model="ir.rule">
+        <field name="name">Google Drive staged row: multi-company</field>
+        <field name="model_id" ref="model_gdrive_staged_row"/>
+        <field name="global" eval="True"/>
+        <field name="domain_force">['|', ('company_id', '=', False), ('company_id', 'in', company_ids)]</field>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="True"/>
+        <field name="perm_unlink" eval="True"/>
+    </record>
+
+    <record id="gdrive_sync_run_company_rule" model="ir.rule">
+        <field name="name">Google Drive sync run: multi-company</field>
+        <field name="model_id" ref="model_gdrive_sync_run"/>
+        <field name="global" eval="True"/>
+        <field name="domain_force">['|', ('company_id', '=', False), ('company_id', 'in', company_ids)]</field>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="True"/>
+        <field name="perm_unlink" eval="True"/>
+    </record>
+
+</odoo>

@@ -1,0 +1,299 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    gdrive.dataset views - one spreadsheet tab.
+
+    WHY the hash block is on the form and not hidden away: when a verification says
+    "drift", the first question is always "is this a real difference or a stale
+    cache?". Showing spec_version next to h_dataset_sheet / h_dataset_odoo answers
+    it immediately - a spec_version that no longer matches the mapping means every
+    stored hash must be treated as absent, not as a cache hit.
+
+    WHY last_read_complete is prominent: it is the delete-planner gate. A partial
+    read looks exactly like "all the rows were deleted", so the flag that proves the
+    read finished has to be visible to a human, not buried in a log.
+-->
+<odoo>
+
+    <record id="gdrive_dataset_view_search" model="ir.ui.view">
+        <field name="name">gdrive.dataset.search</field>
+        <field name="model">gdrive.dataset</field>
+        <field name="arch" type="xml">
+            <search string="Datasets">
+                <field name="tab_title"/>
+                <field name="node_id"/>
+                <field name="mapping_id"/>
+                <field name="connection_id"/>
+                <field name="sheet_gid"/>
+                <separator/>
+                <filter name="filter_gsheet" string="Native Google Sheets" domain="[('source_kind', '=', 'gsheet')]"/>
+                <filter name="filter_xlsx" string="Uploaded .xlsx" domain="[('source_kind', '=', 'xlsx')]"/>
+                <separator/>
+                <filter name="filter_blocked" string="Blocked" domain="[('state', '=', 'blocked')]"
+                        help="Hard-stopped: a mapped column vanished, the tab disappeared, or the tab went empty."/>
+                <filter name="filter_drift" string="In Drift" domain="[('state', '=', 'drift')]"/>
+                <filter name="filter_verified" string="Verified" domain="[('state', '=', 'verified')]"/>
+                <filter name="filter_quarantined" string="Quarantined" domain="[('state', '=', 'quarantined')]"/>
+                <separator/>
+                <filter name="filter_mapped" string="Has a Mapping" domain="[('mapping_id', '!=', False)]"/>
+                <filter name="filter_promoting" string="Promotion Enabled" domain="[('promotion_enabled', '=', True)]"/>
+                <filter name="filter_autoheal" string="Auto-heal Enabled" domain="[('auto_heal_enabled', '=', True)]"/>
+                <separator/>
+                <filter name="filter_incomplete_read" string="Last Read Incomplete"
+                        domain="[('last_read_complete', '=', False)]"
+                        help="Deletes are structurally forbidden while this is set."/>
+                <filter name="filter_hidden" string="Hidden Tabs" domain="[('hidden', '=', True)]"/>
+                <filter name="filter_inactive" string="Archived" domain="[('active', '=', False)]"/>
+                <group expand="0" string="Group By">
+                    <filter name="group_node" string="Drive File" context="{'group_by': 'node_id'}"/>
+                    <filter name="group_state" string="Status" context="{'group_by': 'state'}"/>
+                    <filter name="group_source_kind" string="Source" context="{'group_by': 'source_kind'}"/>
+                    <filter name="group_block_reason" string="Block Reason" context="{'group_by': 'block_reason'}"/>
+                    <filter name="group_mapping" string="Mapping" context="{'group_by': 'mapping_id'}"/>
+                    <filter name="group_connection" string="Connection" context="{'group_by': 'connection_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="gdrive_dataset_view_list" model="ir.ui.view">
+        <field name="name">gdrive.dataset.list</field>
+        <field name="model">gdrive.dataset</field>
+        <field name="arch" type="xml">
+            <list string="Datasets"
+                  decoration-danger="state == 'blocked' or state == 'quarantined'"
+                  decoration-warning="state == 'drift' or not last_read_complete"
+                  decoration-success="state == 'verified'"
+                  decoration-muted="hidden">
+                <field name="node_id"/>
+                <field name="tab_title"/>
+                <field name="tab_index" optional="hide"/>
+                <field name="sheet_gid" optional="show"/>
+                <field name="source_kind"/>
+                <field name="row_count" sum="Rows"/>
+                <field name="used_range" optional="hide"/>
+                <field name="mapping_id" optional="show"/>
+                <field name="promotion_enabled" optional="show" widget="boolean_toggle" readonly="1"/>
+                <field name="last_read_complete" optional="show"/>
+                <field name="last_stage_date" optional="show"/>
+                <field name="last_verify_date" optional="hide"/>
+                <field name="block_reason" optional="hide"/>
+                <field name="hidden" column_invisible="1"/>
+                <field name="connection_id" optional="hide"/>
+                <field name="state" widget="badge"
+                       decoration-success="state == 'verified'"
+                       decoration-danger="state == 'blocked' or state == 'quarantined'"
+                       decoration-warning="state == 'drift'"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="gdrive_dataset_view_form" model="ir.ui.view">
+        <field name="name">gdrive.dataset.form</field>
+        <field name="model">gdrive.dataset</field>
+        <field name="arch" type="xml">
+            <form string="Dataset">
+                <header>
+                    <button name="action_stage_now" type="object" string="Stage Now"
+                            class="btn-primary"
+                            groups="gdrive_odoo_sync.group_gdrive_manager"
+                            help="Re-read this tab and rebuild its staged rows. Reading is always safe: staging never touches a business model."/>
+                    <button name="action_verify_now" type="object" string="Verify Now"
+                            groups="gdrive_odoo_sync.group_gdrive_manager"
+                            invisible="not mapping_id"
+                            help="Recompute both content hashes and drill down where they disagree."/>
+                    <button name="action_build_mapping" type="object" string="Build Mapping"
+                            groups="gdrive_odoo_sync.group_gdrive_manager"
+                            invisible="mapping_id"
+                            help="Opens the mapping builder. It only suggests - nothing is promoted until a human enables the mapping."/>
+                    <field name="state" widget="statusbar"
+                           statusbar_visible="new,staged,mapped,verified"/>
+                </header>
+                <sheet>
+                    <widget name="web_ribbon" title="Blocked" bg_color="text-bg-danger"
+                            invisible="state != 'blocked'"/>
+                    <div class="oe_title">
+                        <label for="tab_title"/>
+                        <h1><field name="tab_title" readonly="1"/></h1>
+                    </div>
+                    <div class="alert alert-danger" role="alert" invisible="state != 'blocked'">
+                        <strong>This dataset is hard-stopped and stages zero rows.</strong>
+                        <div>Reason: <field name="block_reason" readonly="1" nolabel="1" class="oe_inline"/></div>
+                        <field name="block_detail" readonly="1" nolabel="1"/>
+                        <div class="mt-1">
+                            A missing mapped column is treated as a hard stop on purpose: reading it as
+                            empty cells would write NULL over an entire Odoo column.
+                        </div>
+                    </div>
+                    <div class="alert alert-warning" role="alert" invisible="last_read_complete">
+                        The last read of this tab did not complete. Every delete guard is therefore
+                        engaged - no <em>soft delete</em> may enter a plan until a complete read succeeds.
+                    </div>
+                    <group>
+                        <group string="Source">
+                            <field name="node_id" readonly="1"/>
+                            <field name="connection_id" readonly="1"/>
+                            <field name="source_kind" readonly="1"/>
+                            <field name="sheet_gid" readonly="1"
+                                   help="The tab identity. Native Sheets: the numeric sheetId, stable across renames. .xlsx: a negative surrogate."/>
+                            <field name="tab_index" readonly="1"/>
+                            <field name="sheet_type" readonly="1"/>
+                            <field name="hidden" readonly="1"/>
+                            <field name="active" readonly="1"/>
+                        </group>
+                        <group string="Reading Contract">
+                            <field name="header_row"/>
+                            <field name="first_data_row"/>
+                            <field name="sheet_timezone"
+                                   help="IANA name. Required for any datetime column - a spreadsheet has no timezone of its own and guessing one is a contract error."/>
+                            <field name="used_range" readonly="1"/>
+                            <field name="row_count" readonly="1"/>
+                            <field name="last_read_complete" readonly="1"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group string="Promotion">
+                            <field name="mapping_id"/>
+                            <field name="promotion_enabled" readonly="1"/>
+                            <field name="auto_heal_enabled" readonly="1"/>
+                        </group>
+                        <group string="Timestamps">
+                            <field name="last_stage_date" readonly="1"/>
+                            <field name="last_verify_date" readonly="1"/>
+                            <field name="last_full_verify_date" readonly="1"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Columns" name="columns">
+                            <field name="column_ids" nolabel="1" readonly="1">
+                                <list string="Observed Header Schema" default_order="col_index asc">
+                                    <field name="col_index"/>
+                                    <field name="a1_letter"/>
+                                    <field name="header_raw"/>
+                                    <field name="header_canon"/>
+                                    <field name="slug"/>
+                                    <field name="observed_kind"/>
+                                    <field name="nonempty_count" optional="show"/>
+                                    <field name="distinct_count" optional="show"/>
+                                    <field name="is_mapped" widget="boolean_toggle"/>
+                                </list>
+                            </field>
+                            <div class="text-muted mt-2">
+                                <em>observed_kind</em> is advisory only and is never used to canonicalize.
+                                Types come from the mapping contract, always: per-cell type inference would
+                                canonicalize the same raw value differently between runs.
+                            </div>
+                        </page>
+                        <page string="Content Hashes" name="hashes">
+                            <group>
+                                <group string="Fingerprints">
+                                    <field name="spec_version" readonly="1"
+                                           help="H(contract, normalizer version). A stored hash whose spec_version differs from the current one must be treated as absent, never as a cache hit."/>
+                                    <field name="header_fingerprint" readonly="1"/>
+                                    <field name="h_dataset_sheet" readonly="1"/>
+                                    <field name="h_dataset_odoo" readonly="1"/>
+                                </group>
+                                <group string="Fast-path Inputs">
+                                    <field name="last_drive_version" readonly="1"/>
+                                    <field name="last_drive_modified" readonly="1"/>
+                                    <field name="last_odoo_count" readonly="1"/>
+                                    <field name="last_odoo_max_write_date" readonly="1"/>
+                                </group>
+                            </group>
+                            <div class="text-muted">
+                                Both fast paths must be clean before a verification may be skipped: a Drive
+                                file can be untouched while Odoo changed, and a delete does not advance
+                                <em>max(write_date)</em> while an in-place edit does not change the count.
+                            </div>
+                        </page>
+                        <page string="Staged Rows" name="staged_rows">
+                            <field name="staged_row_ids" nolabel="1" readonly="1">
+                                <list string="Staged Rows" default_order="row_number asc"
+                                      decoration-danger="state == 'quarantined'"
+                                      decoration-muted="state == 'obsolete' or state == 'missing'">
+                                    <field name="row_number"/>
+                                    <field name="a1_ref"/>
+                                    <field name="sync_id"/>
+                                    <field name="natural_key"/>
+                                    <field name="identity_source"/>
+                                    <field name="bucket"/>
+                                    <field name="h_row"/>
+                                    <field name="quarantine_reason"/>
+                                    <field name="state" widget="badge"/>
+                                </list>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="gdrive_dataset_column_view_list" model="ir.ui.view">
+        <field name="name">gdrive.dataset.column.list</field>
+        <field name="model">gdrive.dataset.column</field>
+        <field name="arch" type="xml">
+            <list string="Dataset Columns" default_order="dataset_id, col_index asc">
+                <field name="dataset_id"/>
+                <field name="col_index"/>
+                <field name="a1_letter"/>
+                <field name="header_raw"/>
+                <field name="header_canon"/>
+                <field name="slug"/>
+                <field name="observed_kind"/>
+                <field name="nonempty_count"/>
+                <field name="distinct_count"/>
+                <field name="is_mapped"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="gdrive_dataset_column_view_form" model="ir.ui.view">
+        <field name="name">gdrive.dataset.column.form</field>
+        <field name="model">gdrive.dataset.column</field>
+        <field name="arch" type="xml">
+            <form string="Dataset Column">
+                <sheet>
+                    <group>
+                        <group string="Position">
+                            <field name="dataset_id" readonly="1"/>
+                            <field name="col_index" readonly="1"/>
+                            <field name="a1_letter" readonly="1"/>
+                        </group>
+                        <group string="Header">
+                            <field name="header_raw" readonly="1"/>
+                            <field name="header_canon" readonly="1"/>
+                            <field name="slug" readonly="1"/>
+                            <field name="is_mapped" readonly="1"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group string="Observed Distribution (advisory only)">
+                            <field name="observed_kind" readonly="1"/>
+                            <field name="nonempty_count" readonly="1"/>
+                            <field name="distinct_count" readonly="1"/>
+                        </group>
+                    </group>
+                    <div class="text-muted">
+                        Matching is by <em>header_canon</em>, never by position - which is what makes a
+                        column reorder in the spreadsheet a genuine no-op.
+                    </div>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_gdrive_dataset" model="ir.actions.act_window">
+        <field name="name">Datasets</field>
+        <field name="res_model">gdrive.dataset</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="gdrive_dataset_view_search"/>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">No spreadsheet tab has been discovered yet</p>
+            <p>
+                Every tab of every discovered spreadsheet lands here - native Google Sheets and
+                uploaded .xlsx alike. Staging is the default and is never opt-in.
+            </p>
+        </field>
+    </record>
+
+</odoo>

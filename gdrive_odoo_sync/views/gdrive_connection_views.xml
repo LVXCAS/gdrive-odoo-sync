@@ -1,0 +1,293 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    gdrive.connection views.
+
+    WHY this shape: the connection form is the first screen an administrator sees
+    and the place where the single most dangerous failure mode of the whole system
+    is diagnosed - a service account that authenticates perfectly and sees nothing.
+    The Domain-Wide-Delegation client id and the exact scope string are therefore
+    rendered inline, copy-pasteable, next to the Test Connection button, so the
+    admin never has to leave this screen to complete the Google Admin console grant.
+
+    Credential fields deliberately do NOT appear here: the service-account key
+    lives in ir.config_parameter / an environment variable and is entered through
+    Settings (see views/res_config_settings_views.xml), gated on base.group_system.
+-->
+<odoo>
+
+    <record id="gdrive_connection_view_search" model="ir.ui.view">
+        <field name="name">gdrive.connection.search</field>
+        <field name="model">gdrive.connection</field>
+        <field name="arch" type="xml">
+            <search string="Connections">
+                <field name="name"/>
+                <field name="subject_email"/>
+                <field name="sa_client_email"/>
+                <filter name="filter_state_ok" string="Tested OK" domain="[('state', '=', 'ok')]"/>
+                <filter name="filter_state_error" string="In Error" domain="[('state', '=', 'error')]"/>
+                <filter name="filter_state_draft" string="Never Tested" domain="[('state', '=', 'draft')]"/>
+                <separator/>
+                <filter name="filter_dwd" string="Impersonated (DWD)" domain="[('auth_mode', '=', 'dwd')]"/>
+                <filter name="filter_sa_direct" string="Bare Service Account" domain="[('auth_mode', '=', 'sa_direct')]"/>
+                <separator/>
+                <filter name="filter_full_resync" string="Full Resync Requested" domain="[('full_resync_requested', '=', True)]"/>
+                <separator/>
+                <filter name="filter_inactive" string="Archived" domain="[('active', '=', False)]"/>
+                <group expand="0" string="Group By">
+                    <filter name="group_state" string="Status" context="{'group_by': 'state'}"/>
+                    <filter name="group_auth_mode" string="Auth Mode" context="{'group_by': 'auth_mode'}"/>
+                    <filter name="group_company" string="Company" context="{'group_by': 'company_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="gdrive_connection_view_list" model="ir.ui.view">
+        <field name="name">gdrive.connection.list</field>
+        <field name="model">gdrive.connection</field>
+        <field name="arch" type="xml">
+            <list string="Connections"
+                  decoration-danger="state == 'error'"
+                  decoration-success="state == 'ok'"
+                  decoration-muted="state == 'draft'">
+                <field name="sequence" widget="handle"/>
+                <field name="name"/>
+                <field name="subject_email"/>
+                <field name="auth_mode"/>
+                <field name="node_count" string="Nodes"/>
+                <field name="dataset_count" string="Datasets"/>
+                <field name="drift_open_count" string="Open Drift"/>
+                <field name="last_test_date" optional="show"/>
+                <field name="full_resync_requested" optional="hide"/>
+                <field name="company_id" groups="base.group_multi_company" optional="hide"/>
+                <field name="state" widget="badge"
+                       decoration-success="state == 'ok'"
+                       decoration-danger="state == 'error'"
+                       decoration-muted="state == 'draft'"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="gdrive_connection_view_form" model="ir.ui.view">
+        <field name="name">gdrive.connection.form</field>
+        <field name="model">gdrive.connection</field>
+        <field name="arch" type="xml">
+            <form string="Google Drive Connection">
+                <header>
+                    <button name="action_test_connection" type="object" string="Test Connection"
+                            class="btn-primary"
+                            help="Runs probes P1-P7: key parses, token mints, impersonation works, corpus is non-empty."/>
+                    <button name="action_run_discovery" type="object" string="Run Discovery"
+                            invisible="state != 'ok'"
+                            groups="gdrive_odoo_sync.group_gdrive_manager"
+                            help="Queues a discovery pass for this connection. Long work runs in the scheduler, not in this request."/>
+                    <button name="action_request_full_resync" type="object" string="Request Full Resync"
+                            invisible="state != 'ok'"
+                            groups="gdrive_odoo_sync.group_gdrive_admin"
+                            confirm="This clears every cached content hash for this connection and forces a full recompute on the next verification pass. Continue?"/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,ok,error"/>
+                </header>
+                <sheet>
+                    <widget name="web_ribbon" title="Archived" bg_color="text-bg-danger" invisible="active"/>
+                    <div class="oe_title">
+                        <label for="name"/>
+                        <h1><field name="name" placeholder="Avatar - lucaso@"/></h1>
+                    </div>
+                    <div class="alert alert-danger" role="alert" invisible="state != 'error'">
+                        <strong>This connection last failed.</strong>
+                        <field name="last_error" readonly="1" nolabel="1"/>
+                    </div>
+                    <group>
+                        <group string="Identity">
+                            <field name="auth_mode"/>
+                            <field name="subject_email"
+                                   required="auth_mode == 'dwd'"
+                                   readonly="state == 'ok'"
+                                   placeholder="lucaso@avatarnaturalfoods.com"/>
+                            <field name="sequence"/>
+                            <field name="active" widget="boolean_toggle"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                        </group>
+                        <group string="Credential Location">
+                            <field name="sa_key_env_var"/>
+                            <field name="sa_key_param_key"/>
+                            <field name="sa_client_email"/>
+                            <field name="sa_client_id"/>
+                            <field name="scopes"/>
+                        </group>
+                    </group>
+                    <div class="alert alert-info" role="alert" invisible="auth_mode != 'dwd'">
+                        <h4 class="alert-heading">Domain-wide delegation setup</h4>
+                        <p>
+                            A service account is a separate principal with an empty Drive. Without the
+                            grant below every listing returns zero files with HTTP 200 and no error -
+                            which looks exactly like "everything was deleted".
+                        </p>
+                        <ol>
+                            <li>Open <em>admin.google.com</em> &#8594; Security &#8594; Access and data control
+                                &#8594; API controls &#8594; Domain-wide delegation &#8594; Add new.</li>
+                            <li>Paste the <strong>numeric OAuth2 Client ID</strong> shown above as
+                                <em>SA Client ID</em>. It is <strong>not</strong> the
+                                <em>...iam.gserviceaccount.com</em> address - pasting the address is the
+                                single most common setup error.</li>
+                            <li>Paste this exact comma-delimited scope string:<br/>
+                                <code>https://www.googleapis.com/auth/drive.readonly,https://www.googleapis.com/auth/spreadsheets.readonly</code>
+                            </li>
+                            <li>Authorize, then wait for propagation (usually minutes, documented up to 24 hours)
+                                and press <strong>Test Connection</strong>.</li>
+                        </ol>
+                        <p>
+                            Domain-wide delegation cannot impersonate a consumer <em>@gmail.com</em> account.
+                            Files owned by such accounts reach us only because they were shared with the
+                            impersonated subject.
+                        </p>
+                    </div>
+                    <notebook>
+                        <page string="Crawl Scope" name="scope">
+                            <group>
+                                <group string="Corpora">
+                                    <field name="corpora_mode"/>
+                                    <field name="include_shared_with_me"/>
+                                    <field name="include_shared_drives"/>
+                                    <field name="include_trashed"/>
+                                </group>
+                                <group string="Content Limits">
+                                    <field name="max_blob_bytes" widget="integer"/>
+                                    <field name="full_resync_requested" readonly="1"/>
+                                </group>
+                            </group>
+                            <field name="scope_rule_ids" nolabel="1">
+                                <list string="Scope Rules" editable="bottom">
+                                    <field name="sequence" widget="handle"/>
+                                    <field name="kind"/>
+                                    <field name="match_type"/>
+                                    <field name="value"/>
+                                    <field name="applies_to"/>
+                                    <field name="note" optional="hide"/>
+                                </list>
+                            </field>
+                            <div class="text-muted mt-2">
+                                Evaluation is default-allow. As soon as one <em>include</em> rule exists for a
+                                class, that class becomes default-deny. <em>exclude</em> rules always win. A node
+                                that falls out of scope is marked <em>skipped</em>, never deleted.
+                            </div>
+                        </page>
+                        <page string="Pacing &amp; Retries" name="pacing">
+                            <group>
+                                <group string="Rate Limits">
+                                    <field name="sheets_reads_per_min"/>
+                                    <field name="drive_units_per_min"/>
+                                </group>
+                                <group string="HTTP">
+                                    <field name="http_timeout_connect"/>
+                                    <field name="http_timeout_read"/>
+                                    <field name="max_retry_attempts"/>
+                                </group>
+                            </group>
+                            <div class="text-muted">
+                                Pacing beats retrying: the token bucket keeps us under Google's 60 reads/min/user
+                                Sheets cap instead of discovering it through 403 rateLimitExceeded.
+                            </div>
+                        </page>
+                        <page string="Change Cursors" name="cursors">
+                            <field name="cursor_ids" nolabel="1" readonly="1">
+                                <list string="Change Cursors"
+                                      decoration-danger="state == 'invalid'"
+                                      decoration-muted="state == 'bootstrap'">
+                                    <field name="subject_email"/>
+                                    <field name="drive_id"/>
+                                    <field name="page_token"/>
+                                    <field name="last_polled_date"/>
+                                    <field name="state"/>
+                                    <field name="invalid_reason"/>
+                                </list>
+                            </field>
+                            <div class="text-muted mt-2">
+                                A page token minted with a <em>driveId</em> must always be replayed with the same
+                                <em>driveId</em>. Tokens are per principal per drive and are never interchangeable.
+                            </div>
+                        </page>
+                        <page string="Diagnostics" name="diagnostics">
+                            <group>
+                                <group string="Last Test">
+                                    <field name="last_test_date" readonly="1"/>
+                                </group>
+                                <group string="Mirror Counters">
+                                    <field name="node_count" readonly="1"/>
+                                    <field name="dataset_count" readonly="1"/>
+                                    <field name="drift_open_count" readonly="1"/>
+                                </group>
+                            </group>
+                        </page>
+                    </notebook>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_gdrive_connection" model="ir.actions.act_window">
+        <field name="name">Connections</field>
+        <field name="res_model">gdrive.connection</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="gdrive_connection_view_search"/>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">Create a Google Drive connection</p>
+            <p>
+                One connection is one Google identity we crawl as. Set the impersonation subject,
+                complete the domain-wide delegation grant, then press Test Connection.
+            </p>
+        </field>
+    </record>
+
+    <record id="action_gdrive_scope_rule" model="ir.actions.act_window">
+        <field name="name">Scope Rules</field>
+        <field name="res_model">gdrive.scope.rule</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+    <record id="gdrive_scope_rule_view_list" model="ir.ui.view">
+        <field name="name">gdrive.scope.rule.list</field>
+        <field name="model">gdrive.scope.rule</field>
+        <field name="arch" type="xml">
+            <list string="Scope Rules" editable="bottom"
+                  decoration-danger="kind == 'exclude'"
+                  decoration-success="kind == 'include'">
+                <field name="connection_id"/>
+                <field name="sequence" widget="handle"/>
+                <field name="kind"/>
+                <field name="match_type"/>
+                <field name="value"/>
+                <field name="applies_to"/>
+                <field name="note" optional="hide"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="gdrive_scope_rule_view_form" model="ir.ui.view">
+        <field name="name">gdrive.scope.rule.form</field>
+        <field name="model">gdrive.scope.rule</field>
+        <field name="arch" type="xml">
+            <form string="Scope Rule">
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="connection_id"/>
+                            <field name="sequence"/>
+                            <field name="kind"/>
+                        </group>
+                        <group>
+                            <field name="match_type"/>
+                            <field name="value"/>
+                            <field name="applies_to"/>
+                        </group>
+                    </group>
+                    <group string="Note">
+                        <field name="note" nolabel="1"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+</odoo>

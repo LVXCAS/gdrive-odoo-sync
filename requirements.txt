@@ -1,0 +1,31 @@
+# gdrive_odoo_sync — repo-root pip requirements.
+#
+# Odoo.sh installs this file automatically at build time. On a self-hosted
+# instance run it explicitly into the SAME interpreter/virtualenv that runs
+# odoo-bin:
+#
+#     python -m pip install -r requirements.txt
+#
+# WHY this list is deliberately short:
+#
+#   * `requests` is NOT listed. Odoo pins its own version in the platform
+#     requirements; re-pinning it here is how you get a resolver conflict on
+#     Odoo.sh that fails the whole build for no benefit.
+#
+#   * `openpyxl` is NOT listed. Odoo already ships it (it is used by the base
+#     spreadsheet import). It IS declared in __manifest__.py's
+#     `external_dependencies` so that a stripped-down environment fails loudly
+#     at module-install time rather than three hours later inside a cron.
+#
+#   * `google-auth-httplib2` is listed even though nothing imports it directly:
+#     `googleapiclient.discovery.build()` selects it as the transport adapter
+#     for `google.auth` credentials. Without it you get an opaque
+#     "credentials must be from google.auth" style failure at build() time.
+#
+# The module's own `external_dependencies` uses IMPORT names
+# (`google.oauth2`, `googleapiclient`, `openpyxl`); this file uses PIP names.
+# They are not the same strings and confusing them is a common install bug.
+
+google-api-python-client>=2.100.0
+google-auth>=2.23.0
+google-auth-httplib2>=0.1.1

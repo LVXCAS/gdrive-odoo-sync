@@ -1,0 +1,177 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    gdrive.staged.row views - the schema-flexible landing zone.
+
+    WHY every filter and group-by below uses only real columns: `payload` and `canon`
+    are fields.Json. Json is not searchable, not indexable, has no read_group support
+    and returns a deep copy on read. A filter on a Json key would either silently
+    return nothing or crash the group-by. Everything the UI filters, sorts or groups
+    on - state, bucket, dataset_id, quarantine_reason, sync_id, natural_key - is a
+    real indexed column, and adding a new filterable attribute later means adding a
+    real column and a migration, not a Json key.
+
+    The two Json fields are rendered through the pretty-printed Text mirrors
+    (`payload_pretty`, `canon_pretty`) because the web client has no widget for a
+    raw Json field.
+-->
+<odoo>
+
+    <record id="gdrive_staged_row_view_search" model="ir.ui.view">
+        <field name="name">gdrive.staged.row.search</field>
+        <field name="model">gdrive.staged.row</field>
+        <field name="arch" type="xml">
+            <search string="Staged Rows">
+                <field name="sync_id"/>
+                <field name="natural_key"/>
+                <field name="a1_ref"/>
+                <field name="dataset_id"/>
+                <field name="h_row"/>
+                <field name="connection_id"/>
+                <separator/>
+                <filter name="filter_staged" string="Staged" domain="[('state', '=', 'staged')]"/>
+                <filter name="filter_promoted" string="Promoted" domain="[('state', '=', 'promoted')]"/>
+                <filter name="filter_quarantined" string="Quarantined" domain="[('state', '=', 'quarantined')]"
+                        help="Any e: token or missing required value quarantines the whole row - never a partial write."/>
+                <filter name="filter_missing" string="Missing from Sheet" domain="[('state', '=', 'missing')]"/>
+                <filter name="filter_obsolete" string="Obsolete" domain="[('state', '=', 'obsolete')]"/>
+                <separator/>
+                <filter name="filter_identity_sync_id" string="Identified by _sync_id" domain="[('identity_source', '=', 'sync_id')]"/>
+                <filter name="filter_identity_key" string="Identified by Natural Key" domain="[('identity_source', '=', 'natural_key')]"/>
+                <filter name="filter_identity_none" string="No Identity" domain="[('identity_source', '=', 'none')]"
+                        help="Report-only rows. Deletes are structurally disabled for these."/>
+                <separator/>
+                <filter name="filter_dup_identity" string="Duplicate Identity"
+                        domain="[('quarantine_reason', '=', 'duplicate_identity')]"/>
+                <filter name="filter_identifier_numeric" string="Identifier Read as a Number"
+                        domain="[('quarantine_reason', '=', 'identifier_numeric')]"/>
+                <group expand="0" string="Group By">
+                    <filter name="group_dataset" string="Dataset" context="{'group_by': 'dataset_id'}"/>
+                    <filter name="group_state" string="Status" context="{'group_by': 'state'}"/>
+                    <filter name="group_quarantine_reason" string="Quarantine Reason" context="{'group_by': 'quarantine_reason'}"/>
+                    <filter name="group_identity_source" string="Identity Source" context="{'group_by': 'identity_source'}"/>
+                    <filter name="group_bucket" string="Merkle Bucket" context="{'group_by': 'bucket'}"/>
+                    <filter name="group_run" string="Last Run" context="{'group_by': 'run_id'}"/>
+                    <filter name="group_connection" string="Connection" context="{'group_by': 'connection_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="gdrive_staged_row_view_list" model="ir.ui.view">
+        <field name="name">gdrive.staged.row.list</field>
+        <field name="model">gdrive.staged.row</field>
+        <field name="arch" type="xml">
+            <list string="Staged Rows" default_order="dataset_id, row_number asc"
+                  decoration-danger="state == 'quarantined'"
+                  decoration-warning="state == 'missing'"
+                  decoration-success="state == 'promoted'"
+                  decoration-muted="state == 'obsolete'">
+                <field name="dataset_id" optional="show"/>
+                <field name="row_number"/>
+                <field name="a1_ref" optional="show"/>
+                <field name="sync_id" optional="show"/>
+                <field name="natural_key" optional="show"/>
+                <field name="identity_source" optional="hide"/>
+                <field name="bucket" optional="hide"/>
+                <field name="h_row" optional="hide"/>
+                <field name="h_extra" optional="hide"/>
+                <field name="quarantine_reason" optional="show"/>
+                <field name="last_seen_date" optional="hide"/>
+                <field name="missing_since" optional="hide"/>
+                <field name="promotion_link_id" optional="hide"/>
+                <field name="run_id" optional="hide"/>
+                <field name="connection_id" optional="hide"/>
+                <field name="state" widget="badge"
+                       decoration-danger="state == 'quarantined'"
+                       decoration-warning="state == 'missing'"
+                       decoration-success="state == 'promoted'"
+                       decoration-muted="state == 'obsolete'"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="gdrive_staged_row_view_form" model="ir.ui.view">
+        <field name="name">gdrive.staged.row.form</field>
+        <field name="model">gdrive.staged.row</field>
+        <field name="arch" type="xml">
+            <form string="Staged Row">
+                <sheet>
+                    <div class="oe_title">
+                        <label for="a1_ref" string="Cell Reference"/>
+                        <h1><field name="a1_ref" readonly="1"/></h1>
+                    </div>
+                    <div class="alert alert-danger" role="alert" invisible="state != 'quarantined'">
+                        <strong>Quarantined - not promoted, not counted as drift.</strong>
+                        <div>Reason: <field name="quarantine_reason" readonly="1" nolabel="1" class="oe_inline"/></div>
+                        <field name="quarantine_detail" readonly="1" nolabel="1"/>
+                    </div>
+                    <group>
+                        <group string="Identity">
+                            <field name="dataset_id" readonly="1"/>
+                            <field name="row_number" readonly="1"
+                                   help="Display only. Row position is never identity: one user sort would otherwise produce a full-dataset false drift."/>
+                            <field name="sync_id" readonly="1"/>
+                            <field name="natural_key" readonly="1"/>
+                            <field name="identity_source" readonly="1"/>
+                            <field name="state" readonly="1"/>
+                        </group>
+                        <group string="Hashes">
+                            <field name="h_row" readonly="1"/>
+                            <field name="h_row_folded" readonly="1"
+                                   help="Cosmetic-folded variant. Strict hashes differing while folded hashes match is what classifies a difference as COSMETIC."/>
+                            <field name="h_extra" readonly="1"
+                                   help="Digest of the columns outside the contract, so schema growth is visible without polluting the compared hash."/>
+                            <field name="bucket" readonly="1"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group string="Lifecycle">
+                            <field name="first_seen_date" readonly="1"/>
+                            <field name="last_seen_date" readonly="1"/>
+                            <field name="missing_since" readonly="1"/>
+                        </group>
+                        <group string="Links">
+                            <field name="connection_id" readonly="1"/>
+                            <field name="promotion_link_id" readonly="1"/>
+                            <field name="run_id" readonly="1"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Raw Payload" name="payload">
+                            <field name="payload_pretty" nolabel="1" readonly="1" widget="text"/>
+                            <div class="text-muted mt-2">
+                                Every column of the tab, mapped or not, keyed by slug. This is the archive
+                                of record and is kept even for rows that never reach a business model.
+                            </div>
+                        </page>
+                        <page string="Canonical Tokens" name="canon">
+                            <field name="canon_pretty" nolabel="1" readonly="1" widget="text"/>
+                            <div class="text-muted mt-2">
+                                Tagged canonical tokens keyed by Odoo field name (mapped) or slug (unmapped).
+                                The tag is part of the hash preimage, which is why a text <code>1</code>,
+                                a numeric <code>1</code> and a boolean <code>true</code> can never collide.
+                            </div>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_gdrive_staged_row" model="ir.actions.act_window">
+        <field name="name">Staged Rows</field>
+        <field name="res_model">gdrive.staged.row</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="gdrive_staged_row_view_search"/>
+        <field name="context">{'search_default_group_dataset': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">Nothing has been staged yet</p>
+            <p>
+                Staging is the default destination for every row of every tab, whether or not a
+                promotion mapping exists. Data sitting here and nowhere else is a complete,
+                correct outcome.
+            </p>
+        </field>
+    </record>
+
+</odoo>

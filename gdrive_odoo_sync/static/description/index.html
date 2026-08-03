@@ -1,0 +1,113 @@
+<!--
+  App-store description page for gdrive_odoo_sync.
+
+  Deliberately self-contained: no <script>, no external stylesheet, no remote
+  font, no remote image. Odoo renders this file inside the Apps backend, which
+  means anything it references is fetched from wherever the Odoo instance is —
+  frequently a network that cannot reach a CDN, and always a context where a
+  third-party request would leak the customer's database URL in a Referer
+  header. Inline CSS only.
+-->
+<section style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f2937;line-height:1.6;">
+
+  <div style="background:linear-gradient(135deg,#1a2a4a,#0c1426);color:#eef2ff;padding:48px 32px;border-radius:12px;">
+    <h1 style="margin:0 0 8px;font-size:34px;font-weight:700;color:#ffffff;">Google Drive &rarr; Odoo Sync &amp; Verification</h1>
+    <p style="margin:0;font-size:18px;opacity:.9;">Mirror a Google Workspace Drive into Odoo, stage every spreadsheet tab,
+    prove both sides agree with content hashes, and heal only what a human approves.</p>
+  </div>
+
+  <div style="margin-top:28px;padding:20px 24px;border-left:5px solid #b45309;background:#fffbeb;border-radius:6px;">
+    <h3 style="margin:0 0 8px;color:#92400e;font-size:17px;">Read this before installing</h3>
+    <p style="margin:0;">A Google Cloud service account, used on its own, sees <strong>nothing</strong>. It is a
+    separate principal with its own empty Drive corpus, so <code>files.list</code> returns an empty
+    array with HTTP&nbsp;200 and no error &mdash; which looks exactly like &ldquo;everything was deleted&rdquo;.
+    This module therefore requires <strong>domain-wide delegation</strong> with subject impersonation.
+    The full walkthrough is in <code>README.md</code>, and the built-in <em>Test&nbsp;Connection</em> wizard
+    verifies each step independently.</p>
+  </div>
+
+  <h2 style="margin-top:36px;font-size:24px;">What it does</h2>
+  <ol style="padding-left:22px;">
+    <li><strong>Discovers</strong> every file and folder visible to one impersonated Workspace identity &mdash;
+        My&nbsp;Drive, shared-with-me items from colleagues and outside consumer accounts, and every shared drive.</li>
+    <li><strong>Classifies</strong> each object by MIME type: folder, native Sheet, native Doc/Slides/Drawing,
+        binary blob, shortcut, or unsupported.</li>
+    <li><strong>Mirrors</strong> non-spreadsheet content into <code>ir.attachment</code>, preserving the folder hierarchy.
+        Community-compatible: no dependency on Enterprise <em>Documents</em>.</li>
+    <li><strong>Stages</strong> every tab of every spreadsheet &mdash; native Google Sheets <em>and</em> uploaded
+        <code>.xlsx</code> &mdash; as its own dataset with its own header schema.</li>
+    <li><strong>Promotes</strong> rows into real business models only where an administrator authored and enabled a
+        declarative mapping. Never guessed, never automatic.</li>
+    <li><strong>Verifies</strong> with an order-insensitive, bucketed-Merkle content hash on both sides,
+        drilling into rows only where the hashes disagree.</li>
+    <li><strong>Reports</strong> drift as first-class Odoo records plus a downloadable JSON and HTML artefact.</li>
+    <li><strong>Heals</strong> through an explicit, fingerprint-guarded plan &mdash; dry-run by default.</li>
+  </ol>
+
+  <h2 style="margin-top:36px;font-size:24px;">Design commitments</h2>
+  <table style="width:100%;border-collapse:collapse;margin-top:12px;">
+    <tr style="background:#f3f4f6;">
+      <th style="text-align:left;padding:10px 12px;border:1px solid #e5e7eb;width:34%;">Commitment</th>
+      <th style="text-align:left;padding:10px 12px;border:1px solid #e5e7eb;">Why</th>
+    </tr>
+    <tr>
+      <td style="padding:10px 12px;border:1px solid #e5e7eb;">Read-only Google scopes</td>
+      <td style="padding:10px 12px;border:1px solid #e5e7eb;">The module never obtains a write scope, so it is
+      <em>structurally</em> incapable of damaging Drive. Not a policy &mdash; a property.</td>
+    </tr>
+    <tr>
+      <td style="padding:10px 12px;border:1px solid #e5e7eb;">Identity is never a title</td>
+      <td style="padding:10px 12px;border:1px solid #e5e7eb;">Files are keyed by Drive file id, tabs by numeric
+      <code>sheetId</code>, rows by ULID or a declared natural key. Two files may legitimately share a name.</td>
+    </tr>
+    <tr>
+      <td style="padding:10px 12px;border:1px solid #e5e7eb;">A missing mapped column is a hard stop</td>
+      <td style="padding:10px 12px;border:1px solid #e5e7eb;">Treating an absent column as empty cells would write NULL
+      over an entire Odoo column. Zero rows are staged instead.</td>
+    </tr>
+    <tr>
+      <td style="padding:10px 12px;border:1px solid #e5e7eb;">Deletes carry a higher evidence bar</td>
+      <td style="padding:10px 12px;border:1px solid #e5e7eb;">Creates are asserted by data that is present; deletes are
+      inferred from absence &mdash; and absence is what <em>every</em> read failure looks like. Seven independent
+      guards must all pass, and even then the delete is soft.</td>
+    </tr>
+    <tr>
+      <td style="padding:10px 12px;border:1px solid #e5e7eb;">Hard delete is unreachable</td>
+      <td style="padding:10px 12px;border:1px solid #e5e7eb;">No automated path can call <code>unlink()</code> on a
+      business record, at any threshold, under any configuration.</td>
+    </tr>
+    <tr>
+      <td style="padding:10px 12px;border:1px solid #e5e7eb;">Preview and apply share one code path</td>
+      <td style="padding:10px 12px;border:1px solid #e5e7eb;">If dry-run and apply were computed separately, the
+      preview would be a plausible-looking lie.</td>
+    </tr>
+    <tr>
+      <td style="padding:10px 12px;border:1px solid #e5e7eb;">Every cached hash is version-keyed</td>
+      <td style="padding:10px 12px;border:1px solid #e5e7eb;">Change a normalization rule and every stored hash is
+      invalidated. Serving a stale hash as <em>verified</em> is a silent false pass &mdash; the worst failure a
+      verification system can have.</td>
+    </tr>
+  </table>
+
+  <h2 style="margin-top:36px;font-size:24px;">Report-first by default</h2>
+  <p>Promotion is opt-in per dataset and ships disabled. Auto-heal is opt-in per mapping and ships disabled.
+  A deployment that never enables either is still a complete, useful product: it mirrors your Drive, stages every
+  spreadsheet tab, and tells you every day whether Odoo and Drive still agree &mdash; without writing a single
+  business record.</p>
+
+  <h2 style="margin-top:36px;font-size:24px;">Requirements</h2>
+  <ul style="padding-left:22px;">
+    <li>Odoo <strong>18.0</strong>, Community or Enterprise.</li>
+    <li>Python packages <code>google-api-python-client</code>, <code>google-auth</code>,
+        <code>google-auth-httplib2</code> (see the repository-root <code>requirements.txt</code>);
+        <code>openpyxl</code> ships with Odoo.</li>
+    <li>A <strong>Google Workspace</strong> domain whose super administrator can authorise domain-wide delegation.
+        Consumer <code>@gmail.com</code> accounts cannot be impersonation subjects &mdash; their shared files are
+        reached through the Workspace user they shared with.</li>
+  </ul>
+
+  <p style="margin-top:36px;color:#6b7280;font-size:14px;">
+    Licensed LGPL-3. Built for Avatar Natural Foods.
+  </p>
+
+</section>

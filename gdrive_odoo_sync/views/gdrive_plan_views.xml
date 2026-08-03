@@ -1,0 +1,262 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    gdrive.plan / gdrive.plan.action views.
+
+    WHY the fingerprint block is on the form rather than hidden: a plan is a promise
+    about a world that may have moved. The seven captured fingerprints are what let
+    `Apply` refuse instead of corrupt when someone edited the sheet between preview
+    and approval, and a human deciding whether to approve deserves to see what the
+    plan was computed against.
+
+    WHY Approve and Apply are group-gated in the view AND in Python: view groups are
+    a usability affordance, not a security control. `action_apply` re-checks
+    group_gdrive_admin itself.
+-->
+<odoo>
+
+    <record id="gdrive_plan_view_search" model="ir.ui.view">
+        <field name="name">gdrive.plan.search</field>
+        <field name="model">gdrive.plan</field>
+        <field name="arch" type="xml">
+            <search string="Change Plans">
+                <field name="name"/>
+                <field name="dataset_id"/>
+                <field name="mapping_id"/>
+                <field name="verification_id"/>
+                <separator/>
+                <filter name="filter_preview" string="Awaiting Decision" domain="[('state', '=', 'preview')]"/>
+                <filter name="filter_approved" string="Approved" domain="[('state', '=', 'approved')]"/>
+                <filter name="filter_applied" string="Applied" domain="[('state', '=', 'applied')]"/>
+                <filter name="filter_refused" string="Refused (stale)" domain="[('state', '=', 'refused_stale')]"/>
+                <filter name="filter_expired" string="Expired" domain="[('state', '=', 'expired')]"/>
+                <separator/>
+                <filter name="filter_breaker" string="Circuit Breaker Tripped" domain="[('breaker_tripped', '=', True)]"/>
+                <filter name="filter_needs_approval" string="Needs Human Approval" domain="[('requires_approval', '=', True)]"/>
+                <filter name="filter_has_deletes" string="Contains Soft Deletes" domain="[('soft_delete_count', '>', 0)]"/>
+                <filter name="filter_not_converged" string="Did Not Converge" domain="[('convergence_ok', '=', False)]"/>
+                <group expand="0" string="Group By">
+                    <filter name="group_state" string="Status" context="{'group_by': 'state'}"/>
+                    <filter name="group_dataset" string="Dataset" context="{'group_by': 'dataset_id'}"/>
+                    <filter name="group_mapping" string="Mapping" context="{'group_by': 'mapping_id'}"/>
+                    <filter name="group_breaker_reason" string="Breaker Reason" context="{'group_by': 'breaker_reason'}"/>
+                    <filter name="group_apply_result" string="Apply Result" context="{'group_by': 'apply_result'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="gdrive_plan_view_list" model="ir.ui.view">
+        <field name="name">gdrive.plan.list</field>
+        <field name="model">gdrive.plan</field>
+        <field name="arch" type="xml">
+            <list string="Change Plans"
+                  decoration-danger="breaker_tripped or state == 'refused_stale'"
+                  decoration-warning="requires_approval and state == 'preview'"
+                  decoration-success="state == 'applied' and apply_result == 'success'"
+                  decoration-muted="state == 'expired' or state == 'aborted'">
+                <field name="name"/>
+                <field name="dataset_id"/>
+                <field name="mapping_id" optional="show"/>
+                <field name="dry_run" widget="boolean_toggle" readonly="1"/>
+                <field name="create_count" sum="Creates"/>
+                <field name="update_count" sum="Updates"/>
+                <field name="soft_delete_count" sum="Soft deletes"/>
+                <field name="quarantine_count" sum="Quarantines" optional="hide"/>
+                <field name="breaker_tripped" optional="show"/>
+                <field name="breaker_reason" optional="hide"/>
+                <field name="requires_approval" optional="show"/>
+                <field name="expiry_date" optional="show"/>
+                <field name="apply_result" optional="show"/>
+                <field name="convergence_ok" optional="hide"/>
+                <field name="state" widget="badge"
+                       decoration-success="state == 'applied'"
+                       decoration-warning="state == 'preview' or state == 'approved'"
+                       decoration-danger="state == 'refused_stale'"
+                       decoration-muted="state == 'expired' or state == 'aborted'"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="gdrive_plan_view_form" model="ir.ui.view">
+        <field name="name">gdrive.plan.form</field>
+        <field name="model">gdrive.plan</field>
+        <field name="arch" type="xml">
+            <form string="Change Plan">
+                <header>
+                    <button name="action_approve" type="object" string="Approve"
+                            class="btn-primary"
+                            invisible="state != 'preview'"
+                            groups="gdrive_odoo_sync.group_gdrive_admin"
+                            confirm="Approving records who accepted this change set. It does not execute it."/>
+                    <button name="action_apply" type="object" string="Apply"
+                            class="btn-danger"
+                            invisible="state != 'approved' or dry_run"
+                            groups="gdrive_odoo_sync.group_gdrive_admin"
+                            confirm="This writes to business records. Fingerprints are re-checked first and the plan is refused if anything moved since preview. Continue?"/>
+                    <field name="state" widget="statusbar"
+                           statusbar_visible="preview,approved,applied"/>
+                </header>
+                <sheet>
+                    <widget name="web_ribbon" title="Dry Run" bg_color="text-bg-info" invisible="not dry_run"/>
+
+                    <div class="oe_title">
+                        <h1><field name="name" readonly="1"/></h1>
+                    </div>
+
+                    <div class="alert alert-danger" role="alert" invisible="not breaker_tripped">
+                        <h4 class="alert-heading">Circuit breaker tripped</h4>
+                        <div>Reason: <field name="breaker_reason" readonly="1" nolabel="1" class="oe_inline"/></div>
+                        <p>
+                            Nothing executes until a human approves. A create count this far above the
+                            threshold nearly always means the identity strategy broke - a renamed key
+                            column, a wrong domain, an empty Odoo read - not that thousands of new
+                            records genuinely appeared.
+                        </p>
+                    </div>
+                    <div class="alert alert-warning" role="alert"
+                         invisible="soft_delete_count == 0">
+                        This plan contains soft deletes (see the count below and the action list).
+                        Deletes are inferred from absence, and absence is what every read
+                        failure looks like. They execute last, are skipped entirely if any earlier action
+                        failed, and only ever set the archive flag - a hard delete is unreachable from
+                        here under any configuration.
+                    </div>
+                    <div class="alert alert-danger" role="alert" invisible="state != 'refused_stale'">
+                        Refused: at least one fingerprint moved between preview and apply. Someone edited
+                        the sheet or the Odoo records in the meantime. Re-preview and decide again.
+                    </div>
+                    <div class="alert alert-danger" role="alert"
+                         invisible="state != 'applied' or convergence_ok">
+                        <strong>The post-apply hash assertion failed.</strong>
+                        The writer wrote what the comparator asked for, and the two sides still disagree,
+                        which means a normalization rule is asymmetric. The system alerts rather than
+                        retries - retrying would rewrite the same field every night forever.
+                    </div>
+
+                    <group>
+                        <group string="Scope">
+                            <field name="verification_id" readonly="1"/>
+                            <field name="dataset_id" readonly="1"/>
+                            <field name="mapping_id" readonly="1"/>
+                            <field name="run_id" readonly="1"/>
+                            <field name="dry_run"/>
+                            <field name="requires_approval" readonly="1"/>
+                            <field name="expiry_date" readonly="1"
+                                   help="Plans expire 24 hours after creation. An expired plan can never be applied - the world it was computed against no longer exists."/>
+                        </group>
+                        <group string="Counts">
+                            <field name="create_count" readonly="1"/>
+                            <field name="update_count" readonly="1"/>
+                            <field name="soft_delete_count" readonly="1"/>
+                            <field name="quarantine_count" readonly="1"/>
+                            <field name="breaker_tripped" readonly="1"/>
+                            <field name="apply_result" readonly="1"/>
+                            <field name="convergence_ok" readonly="1"/>
+                        </group>
+                    </group>
+
+                    <notebook>
+                        <page string="Actions" name="actions">
+                            <field name="action_ids" nolabel="1" readonly="1">
+                                <list string="Planned Actions" default_order="sequence asc, id asc"
+                                      decoration-danger="state == 'failed'"
+                                      decoration-muted="state == 'skipped'"
+                                      decoration-success="state == 'applied'"
+                                      decoration-bf="action_type == 'soft_delete'">
+                                    <field name="sequence"/>
+                                    <field name="action_type"/>
+                                    <field name="sync_id"/>
+                                    <field name="res_model"/>
+                                    <field name="res_id"/>
+                                    <field name="source_ref"/>
+                                    <field name="staged_row_id" optional="hide"/>
+                                    <field name="batch_index" optional="hide"/>
+                                    <field name="error" optional="show"/>
+                                    <field name="state" widget="badge"
+                                           decoration-danger="state == 'failed'"
+                                           decoration-success="state == 'applied'"
+                                           decoration-muted="state == 'skipped'"/>
+                                </list>
+                            </field>
+                            <div class="text-muted mt-2">
+                                Execution order is fixed: write-back (10), create (20), update (30),
+                                soft delete (40), quarantine (50). Deletes go last precisely so that an
+                                earlier failure - evidence that our view of the world is incomplete -
+                                skips them all.
+                            </div>
+                        </page>
+                        <page string="Fingerprints" name="fingerprints">
+                            <group>
+                                <group string="Drive Side">
+                                    <field name="fp_drive_version" readonly="1"/>
+                                    <field name="fp_drive_modified" readonly="1"/>
+                                    <field name="fp_h_sheet" readonly="1"/>
+                                </group>
+                                <group string="Odoo Side">
+                                    <field name="fp_odoo_count" readonly="1"/>
+                                    <field name="fp_odoo_max_write_date" readonly="1"/>
+                                    <field name="fp_h_odoo" readonly="1"/>
+                                    <field name="fp_spec_version" readonly="1"/>
+                                </group>
+                            </group>
+                            <div class="text-muted">
+                                All seven are re-read immediately before execution. Any change turns
+                                "someone edited the sheet between preview and approval" from a corruption
+                                into a retry.
+                            </div>
+                        </page>
+                        <page string="Audit" name="audit">
+                            <group>
+                                <group string="Approval">
+                                    <field name="approved_by_id" readonly="1"/>
+                                    <field name="approved_date" readonly="1"/>
+                                </group>
+                                <group string="Execution">
+                                    <field name="applied_by_id" readonly="1"/>
+                                    <field name="applied_date" readonly="1"/>
+                                </group>
+                            </group>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="gdrive_plan_action_view_list" model="ir.ui.view">
+        <field name="name">gdrive.plan.action.list</field>
+        <field name="model">gdrive.plan.action</field>
+        <field name="arch" type="xml">
+            <list string="Plan Actions" default_order="plan_id, sequence asc, id asc"
+                  decoration-danger="state == 'failed'"
+                  decoration-muted="state == 'skipped'"
+                  decoration-success="state == 'applied'">
+                <field name="plan_id"/>
+                <field name="sequence"/>
+                <field name="action_type"/>
+                <field name="sync_id"/>
+                <field name="res_model"/>
+                <field name="res_id"/>
+                <field name="source_ref"/>
+                <field name="error"/>
+                <field name="state" widget="badge"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="action_gdrive_plan" model="ir.actions.act_window">
+        <field name="name">Change Plans</field>
+        <field name="res_model">gdrive.plan</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="gdrive_plan_view_search"/>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">No change plan yet</p>
+            <p>
+                Every write this module performs is expressed as a serialized, fingerprinted plan
+                first. Dry run and apply run the exact same planner - if they had separate code
+                paths the preview would be a lie.
+            </p>
+        </field>
+    </record>
+
+</odoo>

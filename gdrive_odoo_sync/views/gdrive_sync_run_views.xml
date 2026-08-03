@@ -1,0 +1,223 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    gdrive.sync.run / gdrive.sync.run.line views - the run log.
+
+    WHY `complete_read` is rendered as a ribbon and not a checkbox in a corner: it is
+    the run-level proof that absence means absence. If any Drive or Sheets call
+    failed, any token expired, any page was lost or any dataset read was partial,
+    this is False and the delete planner is structurally forbidden from running.
+    A person reading a run log needs to see that in one glance.
+
+    WHY the line list is filtered by `code` rather than by free text: the codes are a
+    stable machine vocabulary (EXPORT_SIZE_LIMIT, RATE_LIMITED, TAB_MISSING,
+    INCOMPLETE_SEARCH, XLSX_NO_CACHED_VALUES...). Grepping messages breaks the first
+    time someone improves the wording.
+-->
+<odoo>
+
+    <record id="gdrive_sync_run_view_search" model="ir.ui.view">
+        <field name="name">gdrive.sync.run.search</field>
+        <field name="model">gdrive.sync.run</field>
+        <field name="arch" type="xml">
+            <search string="Sync Runs">
+                <field name="name"/>
+                <field name="connection_id"/>
+                <separator/>
+                <filter name="filter_running" string="Running" domain="[('state', '=', 'running')]"/>
+                <filter name="filter_done" string="Done" domain="[('state', '=', 'done')]"/>
+                <filter name="filter_partial" string="Partial" domain="[('state', '=', 'partial')]"/>
+                <filter name="filter_failed" string="Failed" domain="[('state', 'in', ['failed', 'aborted'])]"/>
+                <separator/>
+                <filter name="filter_incomplete_read" string="Incomplete Read" domain="[('complete_read', '=', False)]"
+                        help="Deletes are forbidden for every dataset touched by such a run."/>
+                <filter name="filter_with_errors" string="With Errors" domain="[('error_count', '>', 0)]"/>
+                <filter name="filter_with_drift" string="With Drift" domain="[('drift_count', '>', 0)]"/>
+                <separator/>
+                <filter name="filter_full" string="Full Mode" domain="[('mode', '=', 'full')]"/>
+                <filter name="filter_delta" string="Delta Mode" domain="[('mode', '=', 'delta')]"/>
+                <group expand="0" string="Group By">
+                    <filter name="group_connection" string="Connection" context="{'group_by': 'connection_id'}"/>
+                    <filter name="group_state" string="Status" context="{'group_by': 'state'}"/>
+                    <filter name="group_trigger" string="Trigger" context="{'group_by': 'trigger'}"/>
+                    <filter name="group_mode" string="Mode" context="{'group_by': 'mode'}"/>
+                    <filter name="group_day" string="Day" context="{'group_by': 'date_start:day'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="gdrive_sync_run_view_list" model="ir.ui.view">
+        <field name="name">gdrive.sync.run.list</field>
+        <field name="model">gdrive.sync.run</field>
+        <field name="arch" type="xml">
+            <list string="Sync Runs"
+                  decoration-danger="state == 'failed' or state == 'aborted'"
+                  decoration-warning="state == 'partial' or not complete_read"
+                  decoration-success="state == 'done' and complete_read"
+                  decoration-it="state == 'running'">
+                <field name="name"/>
+                <field name="connection_id"/>
+                <field name="trigger"/>
+                <field name="mode"/>
+                <field name="date_start"/>
+                <field name="duration_sec" sum="Seconds" optional="show"/>
+                <field name="complete_read"/>
+                <field name="nodes_seen" sum="Nodes" optional="show"/>
+                <field name="rows_staged" sum="Rows staged" optional="show"/>
+                <field name="rows_quarantined" sum="Quarantined" optional="show"/>
+                <field name="records_created" sum="Created" optional="hide"/>
+                <field name="records_updated" sum="Updated" optional="hide"/>
+                <field name="records_soft_deleted" sum="Soft deleted" optional="hide"/>
+                <field name="drift_count" sum="Drift" optional="show"/>
+                <field name="error_count" sum="Errors" optional="show"/>
+                <field name="warning_count" sum="Warnings" optional="hide"/>
+                <field name="state" widget="badge"
+                       decoration-success="state == 'done'"
+                       decoration-warning="state == 'partial'"
+                       decoration-danger="state == 'failed' or state == 'aborted'"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="gdrive_sync_run_view_form" model="ir.ui.view">
+        <field name="name">gdrive.sync.run.form</field>
+        <field name="model">gdrive.sync.run</field>
+        <field name="arch" type="xml">
+            <form string="Sync Run">
+                <header>
+                    <field name="state" widget="statusbar" statusbar_visible="running,done"/>
+                </header>
+                <sheet>
+                    <widget name="web_ribbon" title="Incomplete Read" bg_color="text-bg-danger"
+                            invisible="complete_read"/>
+                    <div class="oe_title">
+                        <h1><field name="name" readonly="1"/></h1>
+                    </div>
+                    <div class="alert alert-warning" role="alert" invisible="complete_read">
+                        This run did not read everything it set out to read. Absence of a record in this
+                        run is therefore not evidence that it was deleted, and the delete planner is
+                        blocked for every dataset it touched.
+                    </div>
+                    <group>
+                        <group string="Run">
+                            <field name="connection_id" readonly="1"/>
+                            <field name="trigger" readonly="1"/>
+                            <field name="mode" readonly="1"/>
+                            <field name="stages" readonly="1"/>
+                            <field name="complete_read" readonly="1"/>
+                        </group>
+                        <group string="Timing">
+                            <field name="date_start" readonly="1"/>
+                            <field name="date_end" readonly="1"/>
+                            <field name="duration_sec" readonly="1"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group string="Mirror">
+                            <field name="nodes_seen" readonly="1"/>
+                            <field name="nodes_ingested" readonly="1"/>
+                            <field name="attachments_written" readonly="1"/>
+                            <field name="datasets_seen" readonly="1"/>
+                        </group>
+                        <group string="Staging">
+                            <field name="rows_staged" readonly="1"/>
+                            <field name="rows_quarantined" readonly="1"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group string="Promotion">
+                            <field name="records_created" readonly="1"/>
+                            <field name="records_updated" readonly="1"/>
+                            <field name="records_soft_deleted" readonly="1"/>
+                        </group>
+                        <group string="Findings and Quota">
+                            <field name="drift_count" readonly="1"/>
+                            <field name="error_count" readonly="1"/>
+                            <field name="warning_count" readonly="1"/>
+                            <field name="drive_units_used" readonly="1"/>
+                            <field name="sheets_reads_used" readonly="1"/>
+                        </group>
+                    </group>
+                    <group string="Full Log">
+                        <field name="log_attachment_id" readonly="1" nolabel="1"
+                               help="Gzipped JSONL. The structured log lines below are the summary; this is the whole thing."/>
+                    </group>
+                    <notebook>
+                        <page string="Log Lines" name="lines">
+                            <field name="line_ids" nolabel="1" readonly="1">
+                                <list string="Log Lines" default_order="id asc"
+                                      decoration-danger="level == 'error'"
+                                      decoration-warning="level == 'warning'">
+                                    <field name="stage"/>
+                                    <field name="level"/>
+                                    <field name="code"/>
+                                    <field name="node_id" optional="show"/>
+                                    <field name="dataset_id" optional="show"/>
+                                    <field name="message"/>
+                                    <field name="duration_ms" optional="hide"/>
+                                </list>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="gdrive_sync_run_line_view_search" model="ir.ui.view">
+        <field name="name">gdrive.sync.run.line.search</field>
+        <field name="model">gdrive.sync.run.line</field>
+        <field name="arch" type="xml">
+            <search string="Log Lines">
+                <field name="code"/>
+                <field name="message"/>
+                <field name="run_id"/>
+                <field name="node_id"/>
+                <field name="dataset_id"/>
+                <filter name="filter_errors" string="Errors" domain="[('level', '=', 'error')]"/>
+                <filter name="filter_warnings" string="Warnings" domain="[('level', '=', 'warning')]"/>
+                <group expand="0" string="Group By">
+                    <filter name="group_code" string="Code" context="{'group_by': 'code'}"/>
+                    <filter name="group_stage" string="Stage" context="{'group_by': 'stage'}"/>
+                    <filter name="group_level" string="Level" context="{'group_by': 'level'}"/>
+                    <filter name="group_run" string="Run" context="{'group_by': 'run_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="gdrive_sync_run_line_view_list" model="ir.ui.view">
+        <field name="name">gdrive.sync.run.line.list</field>
+        <field name="model">gdrive.sync.run.line</field>
+        <field name="arch" type="xml">
+            <list string="Log Lines" default_order="run_id desc, id asc"
+                  decoration-danger="level == 'error'"
+                  decoration-warning="level == 'warning'">
+                <field name="run_id"/>
+                <field name="stage"/>
+                <field name="level"/>
+                <field name="code"/>
+                <field name="node_id"/>
+                <field name="dataset_id"/>
+                <field name="message"/>
+                <field name="duration_ms" optional="hide"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="action_gdrive_sync_run" model="ir.actions.act_window">
+        <field name="name">Sync Runs</field>
+        <field name="res_model">gdrive.sync.run</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="gdrive_sync_run_view_search"/>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">No run has been recorded yet</p>
+            <p>
+                Long network work belongs in the scheduler, never in a form button - an HTTP
+                request is cut off long before a full Drive crawl finishes. Every run, cron or
+                manual, is logged here.
+            </p>
+        </field>
+    </record>
+
+</odoo>

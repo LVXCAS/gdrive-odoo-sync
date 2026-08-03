@@ -1,0 +1,200 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    gdrive.verification views.
+
+    WHY drift_count, data_quality_count and structural_count are three separate
+    columns everywhere, never one total: "12 drifts" must never silently mean
+    "12 cells I could not read". A type-coercion failure and a genuine value
+    difference demand different human responses, so the three counts stay disjoint
+    in the model and disjoint in every view built on it.
+
+    WHY `mode` is exposed: it says which layer the comparison actually reached.
+    `cache` means neither side moved and no API call was made; `full` means the
+    fast paths were bypassed. A run stuck on `cache` forever is the signature of a
+    fingerprint that stopped advancing.
+-->
+<odoo>
+
+    <record id="gdrive_verification_view_search" model="ir.ui.view">
+        <field name="name">gdrive.verification.search</field>
+        <field name="model">gdrive.verification</field>
+        <field name="arch" type="xml">
+            <search string="Verifications">
+                <field name="dataset_id"/>
+                <field name="mapping_id"/>
+                <field name="run_id"/>
+                <separator/>
+                <filter name="filter_drift" string="Drift" domain="[('result', '=', 'drift')]"/>
+                <filter name="filter_verified" string="Verified" domain="[('result', '=', 'verified')]"/>
+                <filter name="filter_blocked" string="Blocked" domain="[('result', '=', 'blocked')]"/>
+                <filter name="filter_error" string="Error" domain="[('result', '=', 'error')]"/>
+                <separator/>
+                <filter name="filter_incomplete" string="Read Incomplete" domain="[('read_complete', '=', False)]"/>
+                <filter name="filter_structural" string="Has Structural Findings" domain="[('structural_count', '>', 0)]"/>
+                <filter name="filter_dq" string="Has Data-quality Findings" domain="[('data_quality_count', '>', 0)]"/>
+                <separator/>
+                <filter name="filter_today" string="Today"
+                        domain="[('date', '&gt;=', context_today().strftime('%Y-%m-%d 00:00:00'))]"/>
+                <filter name="filter_last_week" string="Last 7 Days"
+                        domain="[('date', '&gt;=', (context_today() - relativedelta(days=7)).strftime('%Y-%m-%d 00:00:00'))]"/>
+                <group expand="0" string="Group By">
+                    <filter name="group_dataset" string="Dataset" context="{'group_by': 'dataset_id'}"/>
+                    <filter name="group_result" string="Result" context="{'group_by': 'result'}"/>
+                    <filter name="group_mode" string="Depth Reached" context="{'group_by': 'mode'}"/>
+                    <filter name="group_mapping" string="Mapping" context="{'group_by': 'mapping_id'}"/>
+                    <filter name="group_run" string="Run" context="{'group_by': 'run_id'}"/>
+                    <filter name="group_date" string="Date" context="{'group_by': 'date:day'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="gdrive_verification_view_list" model="ir.ui.view">
+        <field name="name">gdrive.verification.list</field>
+        <field name="model">gdrive.verification</field>
+        <field name="arch" type="xml">
+            <list string="Verifications"
+                  decoration-danger="result == 'error' or result == 'blocked'"
+                  decoration-warning="result == 'drift'"
+                  decoration-success="result == 'verified'">
+                <field name="date"/>
+                <field name="dataset_id"/>
+                <field name="mapping_id" optional="show"/>
+                <field name="mode"/>
+                <field name="rows_sheet" sum="Rows (sheet)"/>
+                <field name="rows_odoo" sum="Rows (Odoo)"/>
+                <field name="buckets_differing" optional="show" sum="Buckets"/>
+                <field name="rows_examined" optional="hide" sum="Rows examined"/>
+                <field name="drift_count" string="Drift" sum="Drift"/>
+                <field name="data_quality_count" string="Data quality" sum="Data quality"/>
+                <field name="structural_count" string="Structural" sum="Structural"/>
+                <field name="read_complete" optional="show"/>
+                <field name="duration_sec" optional="hide" sum="Seconds"/>
+                <field name="run_id" optional="hide"/>
+                <field name="result" widget="badge"
+                       decoration-success="result == 'verified'"
+                       decoration-warning="result == 'drift'"
+                       decoration-danger="result == 'error' or result == 'blocked'"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="gdrive_verification_view_form" model="ir.ui.view">
+        <field name="name">gdrive.verification.form</field>
+        <field name="model">gdrive.verification</field>
+        <field name="arch" type="xml">
+            <form string="Verification">
+                <sheet>
+                    <div class="oe_title">
+                        <h1><field name="name" readonly="1"/></h1>
+                    </div>
+                    <div class="alert alert-warning" role="alert" invisible="read_complete">
+                        The underlying read did not complete. Absence of a row is therefore not
+                        evidence of deletion, and every delete guard stays engaged.
+                    </div>
+                    <group>
+                        <group string="Scope">
+                            <field name="dataset_id" readonly="1"/>
+                            <field name="mapping_id" readonly="1"/>
+                            <field name="run_id" readonly="1"/>
+                            <field name="date" readonly="1"/>
+                            <field name="mode" readonly="1"/>
+                            <field name="result" readonly="1"/>
+                            <field name="duration_sec" readonly="1"/>
+                        </group>
+                        <group string="Counts">
+                            <field name="rows_sheet" readonly="1"/>
+                            <field name="rows_odoo" readonly="1"/>
+                            <field name="buckets_differing" readonly="1"/>
+                            <field name="rows_examined" readonly="1"/>
+                            <field name="drift_count" readonly="1"/>
+                            <field name="data_quality_count" readonly="1"/>
+                            <field name="structural_count" readonly="1"/>
+                            <field name="read_complete" readonly="1"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group string="Content Hashes">
+                            <field name="h_dataset_sheet" readonly="1"/>
+                            <field name="h_dataset_odoo" readonly="1"/>
+                        </group>
+                        <group string="Artefacts">
+                            <field name="plan_id" readonly="1"/>
+                            <field name="report_attachment_id" readonly="1"
+                                   help="JSON and HTML rendering of this verification, including every drift with its canonical forms and A1 reference."/>
+                        </group>
+                    </group>
+                    <div class="text-muted">
+                        Alongside the hashes, the row counts and the per-column raw totals are recorded as
+                        independent controls. If both sides were canonicalized wrongly in the same way the
+                        hashes agree and canonical totals agree - only a raw total disagrees.
+                    </div>
+                    <notebook>
+                        <page string="Findings" name="drifts">
+                            <field name="drift_ids" nolabel="1" readonly="1">
+                                <list string="Findings" default_order="severity desc, id asc"
+                                      decoration-danger="severity == 'blocking' or severity == 'critical'"
+                                      decoration-warning="severity == 'warning'"
+                                      decoration-muted="resolution != 'open'">
+                                    <field name="category"/>
+                                    <field name="drift_type"/>
+                                    <field name="severity"/>
+                                    <field name="delta_class" optional="show"/>
+                                    <field name="field_name" optional="show"/>
+                                    <field name="sync_id" optional="hide"/>
+                                    <field name="natural_key" optional="hide"/>
+                                    <field name="source_ref"/>
+                                    <field name="canon_sheet"/>
+                                    <field name="canon_odoo"/>
+                                    <field name="resolution"/>
+                                </list>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="gdrive_verification_view_graph" model="ir.ui.view">
+        <field name="name">gdrive.verification.graph</field>
+        <field name="model">gdrive.verification</field>
+        <field name="arch" type="xml">
+            <graph string="Verification Findings" type="bar" stacked="1" sample="1">
+                <field name="date" interval="day" type="row"/>
+                <field name="drift_count" type="measure"/>
+                <field name="data_quality_count" type="measure"/>
+                <field name="structural_count" type="measure"/>
+            </graph>
+        </field>
+    </record>
+
+    <record id="gdrive_verification_view_pivot" model="ir.ui.view">
+        <field name="name">gdrive.verification.pivot</field>
+        <field name="model">gdrive.verification</field>
+        <field name="arch" type="xml">
+            <pivot string="Verification Findings" sample="1">
+                <field name="dataset_id" type="row"/>
+                <field name="result" type="col"/>
+                <field name="drift_count" type="measure"/>
+                <field name="data_quality_count" type="measure"/>
+                <field name="structural_count" type="measure"/>
+            </pivot>
+        </field>
+    </record>
+
+    <record id="action_gdrive_verification" model="ir.actions.act_window">
+        <field name="name">Verifications</field>
+        <field name="res_model">gdrive.verification</field>
+        <field name="view_mode">list,form,graph,pivot</field>
+        <field name="search_view_id" ref="gdrive_verification_view_search"/>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">No verification has run yet</p>
+            <p>
+                A verification run with auto-heal off everywhere is a complete, useful,
+                non-mutating product. Report first, heal later - and only on approval.
+            </p>
+        </field>
+    </record>
+
+</odoo>
