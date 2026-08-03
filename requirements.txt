@@ -29,3 +29,8 @@
 google-api-python-client>=2.100.0
 google-auth>=2.23.0
 google-auth-httplib2>=0.1.1
+
+# Required by the standalone DriftWatch service for uploaded .xlsx workbooks.
+# The Odoo addon deliberately omits it (Odoo ships its own copy); the service
+# has no Odoo underneath it, so it must ask for openpyxl explicitly.
+openpyxl>=3.1.0

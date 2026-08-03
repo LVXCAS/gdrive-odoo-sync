@@ -77,3 +77,15 @@ sessions/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# ---------------------------------------------------------------------------
+# DriftWatch local datastore.
+#
+# This SQLite file holds real staged business data pulled from Drive --
+# cashflow, AP/AR, inventory references, personal financial statements. It is
+# a copy of the corpus, not a cache, and it must never leave this machine.
+# ---------------------------------------------------------------------------
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+driftwatch.sqlite3
