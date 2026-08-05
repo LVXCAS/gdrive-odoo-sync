@@ -147,7 +147,8 @@ def collect(conn, cfg) -> dict:
     if run_id is not None:
         by_type = [dict(r) for r in conn.execute(
             'SELECT drift_type, COUNT(*) n, '
-            " MAX(CASE WHEN severity = 'error' THEN 1 ELSE 0 END) has_error "
+            " MAX(CASE severity WHEN 'error' THEN 2 WHEN 'warning' THEN 1 "
+            '  ELSE 0 END) sev_rank '
             'FROM drift WHERE run_id = ? GROUP BY drift_type ORDER BY n DESC',
             (run_id,))]
         total_drift = sum(r['n'] for r in by_type)
@@ -158,8 +159,9 @@ def collect(conn, cfg) -> dict:
             'SELECT dr.*, d.tab_title, n.name AS file_name FROM drift dr '
             'LEFT JOIN dataset d ON d.id = dr.dataset_id '
             'LEFT JOIN node n ON n.file_id = d.file_id '
-            "WHERE dr.run_id = ? ORDER BY CASE dr.severity WHEN 'error' THEN 0 "
-            'ELSE 1 END, dr.id LIMIT ?', (run_id, MAX_FINDINGS))]
+            'WHERE dr.run_id = ? ORDER BY CASE dr.severity '
+            "  WHEN 'error' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END, "
+            'dr.id LIMIT ?', (run_id, MAX_FINDINGS))]
 
     runs = [dict(r) for r in conn.execute(
         'SELECT id, kind, status, started_at, finished_at FROM run '
@@ -208,6 +210,16 @@ def _n(value) -> str:
 #: Status marks are glyph + word, never colour alone.
 STATE_MARK = {'ok': ('&#10003;', 'Watching'), 'stale': ('&#9650;', 'Stale'),
               'failed': ('&#10007;', 'Failed'), 'unknown': ('&#8226;', 'No data')}
+
+#: severity -> (glyph, css suffix). `info` is deliberately quiet: it exists so
+#: a fact can be recorded without being shouted.
+SEV_MARK = {'error': '&#10007;', 'warning': '&#9650;', 'info': '&#8226;'}
+SEV_BY_RANK = {2: 'error', 1: 'warning', 0: 'info'}
+
+
+def _sev(name: str) -> tuple:
+    name = name if name in SEV_MARK else 'warning'
+    return SEV_MARK[name], name
 
 CSS = """
 *,*::before,*::after{box-sizing:border-box}
@@ -281,6 +293,7 @@ h2{font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
 .sev{font-size:11px;font-weight:600;white-space:nowrap;color:var(--ink-2)}
 .sev .g{color:var(--sev)}
 .sev-error{--sev:var(--critical)} .sev-warning{--sev:var(--warning)}
+.sev-info{--sev:var(--muted)}
 
 /* tables -------------------------------------------------------------- */
 .scroll{overflow-x:auto}
@@ -311,8 +324,7 @@ def _bar_rows(by_type: list) -> str:
         # Scale to 85% so the value at the bar tip always has room; relative
         # proportions are untouched.
         width = max(0.4, row['n'] / top * 85)
-        sev = 'error' if row['has_error'] else 'warning'
-        glyph = '&#10007;' if sev == 'error' else '&#9650;'
+        glyph, sev = _sev(SEV_BY_RANK.get(row.get('sev_rank'), 'warning'))
         out.append(
             f'<div class="bar-row">'
             f'<div class="bar-name"><span class="bar-type">{_e(row["drift_type"])}</span>'
@@ -331,8 +343,7 @@ def _findings_table(drift: dict) -> str:
     for f in findings:
         where = f'{f.get("file_name") or "?"} / {f.get("tab_title") or "?"}'
         at = ' '.join(x for x in (f.get('row_ref'), f.get('column_key')) if x)
-        sev = 'error' if f.get('severity') == 'error' else 'warning'
-        glyph = '&#10007;' if sev == 'error' else '&#9650;'
+        glyph, sev = _sev(f.get('severity') or 'warning')
         values = ''
         if f.get('sheet_value') is not None or f.get('odoo_value') is not None:
             values = (f'sheet={_e(f.get("sheet_value"))}<br>'
