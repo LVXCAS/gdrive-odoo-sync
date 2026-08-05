@@ -98,6 +98,36 @@ sudo systemctl enable --now driftwatch
 journalctl -u driftwatch -f
 ```
 
+## The dashboard
+
+```
+python -m driftwatch dashboard --open     # write a snapshot and open it
+python -m driftwatch dashboard --serve    # live at http://127.0.0.1:8787
+```
+
+The daemon also rewrites `logs/dashboard.html` after every cycle, so the file
+is current whether or not anything is serving it. Leave it open in a tab — it
+refreshes itself.
+
+It leads with the answer to "is this working": a health banner that reads
+**Watching**, **Stale**, **Failed** or **No data**, then the finding count, the
+corpus and dataset totals, findings by type, and the individual findings.
+
+Two deliberate properties:
+
+- **It never leaves this machine.** The page embeds staged content — file
+  names, tab titles, and the sheet and Odoo values behind every finding. That
+  is the same material as the datastore. `--serve` binds to loopback only,
+  there is no authentication in front of it, and `logs/` and `dashboard.html`
+  are gitignored. Do not put it behind a tunnel or a shared folder.
+- **It opens the store read-only.** The daemon is usually mid-cycle and holds
+  the write lock; a reader that also writes would make a browser refresh
+  contend with a running crawl.
+
+**Stale** is the state worth caring about: it means the last cycle finished
+more than 2.5x the interval ago, so nothing is being watched. A stopped
+service sends no mail, which looks exactly like no drift.
+
 ## Is it alive?
 
 ```

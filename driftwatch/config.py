@@ -91,6 +91,9 @@ class Config:
     interval_seconds: int = 3600
     log_dir: Path = REPO_ROOT / 'logs'
     log_retain: int = 14               # rotated files kept, one per day
+    #: Rewritten after every cycle. Embeds staged content, so it is gitignored
+    #: and belongs beside the logs, not anywhere that syncs.
+    dashboard_path: Path = REPO_ROOT / 'logs' / 'dashboard.html'
 
     # Drift digest email. Absent SMTP settings disable alerting; they do not
     # stop the service. A crawler that refuses to run because nobody set up
@@ -111,8 +114,19 @@ class Config:
     def alerts_enabled(self) -> bool:
         return bool(self.smtp_host and self.alert_to)
 
+    @property
+    def sa_key_configured(self) -> bool:
+        """``Path('')`` normalises to ``Path('.')``, which exists -- so an
+        unset key would otherwise sail past an ``.exists()`` check and fail
+        later as a confusing JSON error on a directory."""
+        return str(self.sa_key_path) not in ('', '.')
+
     def service_account_info(self) -> dict:
         """Load and sanity-check the key. Raises before any network call."""
+        if not self.sa_key_configured:
+            raise FileNotFoundError(
+                'DRIFTWATCH_SA_KEY is not set. Point it at the '
+                'service-account JSON key (see .env.example).')
         if not self.sa_key_path.exists():
             raise FileNotFoundError(
                 f'Service-account key not found at {self.sa_key_path}. '
@@ -136,6 +150,7 @@ class Config:
             'db_path': str(self.db_path),
             'interval_seconds': self.interval_seconds,
             'log_dir': str(self.log_dir),
+            'dashboard_path': str(self.dashboard_path),
             'smtp_host': self.smtp_host or '(unset)',
             'smtp_port': self.smtp_port,
             'smtp_user': self.smtp_user or '(unset)',
@@ -166,10 +181,14 @@ def load_config(dotenv: Optional[Path] = None) -> Config:
         host = odoo_url.split('//')[-1]
         default_db = host.split('.')[0]
 
+    log_dir = Path(get('DRIFTWATCH_LOG_DIR', str(REPO_ROOT / 'logs')))
+
     return Config(
-        sa_key_path=Path(get('DRIFTWATCH_SA_KEY',
-                             str(Path.home() / 'Downloads' /
-                                 'driftwatch-01-0616db5edf38.json'))),
+        # No default on purpose. This used to fall back to a named key in
+        # ~/Downloads -- a folder people clear out, and a path no deployment
+        # should depend on. An unset key must fail loudly at startup, not
+        # resolve to somewhere the credential happens to have been once.
+        sa_key_path=Path(get('DRIFTWATCH_SA_KEY')),
         subject_email=get('DRIFTWATCH_SUBJECT', get('ODOO_LOGIN')),
         odoo_url=odoo_url,
         odoo_db=get('ODOO_DB', default_db),
@@ -180,8 +199,10 @@ def load_config(dotenv: Optional[Path] = None) -> Config:
         sheets_reads_per_min=int(get('DRIFTWATCH_SHEETS_RPM', '60') or 60),
         drive_reads_per_min=int(get('DRIFTWATCH_DRIVE_RPM', '300') or 300),
         interval_seconds=_duration(get('DRIFTWATCH_INTERVAL'), 3600),
-        log_dir=Path(get('DRIFTWATCH_LOG_DIR', str(REPO_ROOT / 'logs'))),
+        log_dir=log_dir,
         log_retain=int(get('DRIFTWATCH_LOG_RETAIN', '14') or 14),
+        dashboard_path=Path(get('DRIFTWATCH_DASHBOARD',
+                                str(log_dir / 'dashboard.html'))),
         smtp_host=get('DRIFTWATCH_SMTP_HOST'),
         smtp_port=int(get('DRIFTWATCH_SMTP_PORT', '587') or 587),
         smtp_user=get('DRIFTWATCH_SMTP_USER'),
