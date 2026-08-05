@@ -25,6 +25,8 @@ import sqlite3
 from pathlib import Path
 from typing import Optional
 
+from .store import cycle_drift_where, cycle_run_ids
+
 #: Cycles older than this multiple of the interval mean nobody is watching.
 STALE_AFTER = 2.5
 
@@ -139,29 +141,32 @@ def collect(conn, cfg) -> dict:
         ' SUM(CASE WHEN blocked_reason IS NOT NULL AND blocked_reason != \'\' '
         '     THEN 1 ELSE 0 END) blocked FROM dataset').fetchone()
 
-    run = conn.execute("SELECT id FROM run WHERE kind = 'verify' "
-                       'ORDER BY id DESC LIMIT 1').fetchone()
-    run_id = run['id'] if run else None
+    # The whole cycle, not just its verify run -- the stage phase records
+    # drift of its own, and a page that omits it under-reports the corpus by
+    # every coercion the stager caught.
+    cycle = cycle_run_ids(conn)
+    run_id = cycle[-1] if cycle else None
+    where, args = cycle_drift_where(conn)
 
     by_type, findings, severities, total_drift = [], [], {}, 0
-    if run_id is not None:
+    if cycle:
         by_type = [dict(r) for r in conn.execute(
             'SELECT drift_type, COUNT(*) n, '
             " MAX(CASE severity WHEN 'error' THEN 2 WHEN 'warning' THEN 1 "
             '  ELSE 0 END) sev_rank '
-            'FROM drift WHERE run_id = ? GROUP BY drift_type ORDER BY n DESC',
-            (run_id,))]
+            'FROM drift WHERE %s GROUP BY drift_type '
+            'ORDER BY n DESC' % where, args)]
         total_drift = sum(r['n'] for r in by_type)
         severities = {r['severity']: r['n'] for r in conn.execute(
-            'SELECT severity, COUNT(*) n FROM drift WHERE run_id = ? '
-            'GROUP BY severity', (run_id,))}
+            'SELECT severity, COUNT(*) n FROM drift WHERE %s '
+            'GROUP BY severity' % where, args)}
         findings = [dict(r) for r in conn.execute(
             'SELECT dr.*, d.tab_title, n.name AS file_name FROM drift dr '
             'LEFT JOIN dataset d ON d.id = dr.dataset_id '
             'LEFT JOIN node n ON n.file_id = d.file_id '
-            'WHERE dr.run_id = ? ORDER BY CASE dr.severity '
+            'WHERE %s ORDER BY CASE dr.severity '
             "  WHEN 'error' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END, "
-            'dr.id LIMIT ?', (run_id, MAX_FINDINGS))]
+            'dr.id LIMIT ?' % where, (*args, MAX_FINDINGS))]
 
     runs = [dict(r) for r in conn.execute(
         'SELECT id, kind, status, started_at, finished_at FROM run '

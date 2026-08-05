@@ -21,7 +21,7 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Optional
+from typing import Any, Iterable, Iterator, Optional, Sequence
 
 SCHEMA_VERSION = 2
 
@@ -358,6 +358,27 @@ class Store:
         row = self.latest_run(kind)
         return int(row['id']) if row else None
 
+    def latest_cycle_run_ids(self) -> list[int]:
+        """Every run id belonging to the newest cycle, oldest first."""
+        return cycle_run_ids(self.conn)
+
+    def cycle_drifts(self) -> list[sqlite3.Row]:
+        """The newest cycle's findings, each counted once. See
+        ``cycle_drift_where`` for why this is not a plain union."""
+        where, args = cycle_drift_where(self.conn)
+        return self.conn.execute(
+            'SELECT dr.*, d.tab_title, n.name AS file_name FROM drift dr '
+            'LEFT JOIN dataset d ON d.id = dr.dataset_id '
+            'LEFT JOIN node n ON n.file_id = d.file_id '
+            'WHERE %s ORDER BY dr.id' % where, args).fetchall()
+
+    def cycle_drift_summary(self) -> dict:
+        """``{drift_type: count}`` for the newest cycle, each counted once."""
+        where, args = cycle_drift_where(self.conn)
+        return {r['drift_type']: r['n'] for r in self.conn.execute(
+            'SELECT drift_type, COUNT(*) n FROM drift WHERE %s '
+            'GROUP BY drift_type ORDER BY n DESC' % where, args)}
+
     def latest_run_stats(self, kind: str) -> dict:
         """The newest run's stats blob, or ``{}``."""
         row = self.latest_run(kind)
@@ -388,12 +409,25 @@ class Store:
              kw.get('detail'), now))
 
     def drifts(self, run_id: Optional[int] = None,
-               drift_type: Optional[str] = None) -> list[sqlite3.Row]:
+               drift_type: Optional[str] = None,
+               run_ids: Optional[Sequence[int]] = None) -> list[sqlite3.Row]:
+        """Drift rows, optionally narrowed to one run or one cycle's runs.
+
+        ``run_ids=[]`` means "a cycle with no runs in it" and returns nothing,
+        which is not the same as ``run_ids=None`` ("do not filter by run").
+        Collapsing the two would turn an empty cycle into every finding ever
+        recorded, on the surface a human reads to decide whether to act.
+        """
         sql = ('SELECT dr.*, d.tab_title, n.name AS file_name FROM drift dr '
                'LEFT JOIN dataset d ON d.id = dr.dataset_id '
                'LEFT JOIN node n ON n.file_id = d.file_id WHERE 1=1')
         args: list = []
-        if run_id is not None:
+        if run_ids is not None:
+            if not run_ids:
+                return []
+            sql += ' AND dr.run_id IN (%s)' % ','.join('?' * len(run_ids))
+            args.extend(run_ids)
+        elif run_id is not None:
             sql += ' AND dr.run_id = ?'
             args.append(run_id)
         if drift_type:
@@ -401,10 +435,16 @@ class Store:
             args.append(drift_type)
         return self.conn.execute(sql + ' ORDER BY dr.id', args).fetchall()
 
-    def drift_summary(self, run_id: Optional[int] = None) -> dict:
+    def drift_summary(self, run_id: Optional[int] = None,
+                      run_ids: Optional[Sequence[int]] = None) -> dict:
         sql = 'SELECT drift_type, COUNT(*) n FROM drift'
         args: list = []
-        if run_id is not None:
+        if run_ids is not None:
+            if not run_ids:
+                return {}
+            sql += ' WHERE run_id IN (%s)' % ','.join('?' * len(run_ids))
+            args.extend(run_ids)
+        elif run_id is not None:
             sql += ' WHERE run_id = ?'
             args.append(run_id)
         rows = self.conn.execute(sql + ' GROUP BY drift_type ORDER BY n DESC',
@@ -425,6 +465,73 @@ class Store:
             'ON CONFLICT(subject) DO UPDATE SET page_token = excluded.page_token, '
             'updated_at = excluded.updated_at', (subject, token, now))
         self.conn.commit()
+
+
+def cycle_run_ids(conn: sqlite3.Connection) -> list[int]:
+    """Every run id belonging to the newest cycle, oldest first.
+
+    A cycle is crawl -> stage -> verify, and *both* of the last two record
+    drift: the stager reports what it found while reading (type_coercion,
+    duplicate identities, empty tabs), the verifier reports what it found
+    while comparing. Reporting on the verify run alone -- which is what the
+    digest and the dashboard both used to do -- silently dropped every finding
+    the stager raised, and staging is where the unrecoverable ones surface: by
+    the time a ``007`` has been read back as ``7``, the leading zeros are
+    already gone.
+
+    Bounded below by the previous verify run so one cycle never absorbs an
+    older one's runs, and above by the newest verify so a crawl or stage still
+    in flight is not reported as though it had finished.
+
+    Takes a connection rather than a ``Store`` because the dashboard opens the
+    database read-only and must reach the same answer as the daemon.
+    """
+    newest = conn.execute("SELECT id FROM run WHERE kind = 'verify' "
+                          'ORDER BY id DESC LIMIT 1').fetchone()
+    if newest is None:
+        return []
+    top = int(newest[0])
+    previous = conn.execute("SELECT id FROM run WHERE kind = 'verify' AND id < ? "
+                            'ORDER BY id DESC LIMIT 1', (top,)).fetchone()
+    floor = int(previous[0]) if previous else 0
+    return [int(r[0]) for r in conn.execute(
+        'SELECT id FROM run WHERE id > ? AND id <= ? ORDER BY id',
+        (floor, top))]
+
+
+def cycle_drift_where(conn: sqlite3.Connection) -> tuple:
+    """``(sql_fragment, args)`` selecting the newest cycle's drift, counted once.
+
+    Both drift-recording phases run every cycle and they overlap: the stager
+    reports what it saw while reading, the verifier re-reports most of it while
+    comparing. Taking the plain union of the cycle's runs therefore doubles
+    every shared finding -- 11,410 duplicate identities become 22,820 -- which
+    is a worse lie than the omission it was meant to fix.
+
+    Nor can the two copies be matched up row by row: for the same duplicate key
+    the stager writes ``column_key='sku'`` with no ``row_ref``, and the verifier
+    writes ``column_key='natural_key'`` with the first row's A1 reference.
+    Equal findings, different columns.
+
+    So precedence, not merging: **the verify run is authoritative for every
+    drift type it emits, and the stage run contributes only the types the
+    verifier never emits at all** -- ``type_coercion`` above all, which is
+    detected during canonicalization and cannot be re-derived downstream. The
+    rule cannot double-count, and it cannot collapse two distinct findings into
+    one, which a value-based dedupe key could.
+
+    The fragment uses unqualified column names so it drops into the dashboard's
+    joined query as well; neither ``dataset`` nor ``node`` has a ``run_id`` or
+    ``drift_type`` column, so nothing is ambiguous.
+    """
+    cycle = cycle_run_ids(conn)
+    if not cycle:
+        return '0', []
+    verify = cycle[-1]
+    return ('run_id IN (%s) AND (run_id = ? OR drift_type NOT IN '
+            '(SELECT drift_type FROM drift WHERE run_id = ?))'
+            % ','.join('?' * len(cycle)),
+            [*cycle, verify, verify])
 
 
 def _clip(value: Any, limit: int = 500) -> Optional[str]:

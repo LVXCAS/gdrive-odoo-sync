@@ -76,6 +76,12 @@ import json
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
 
+from .drift_rules import (
+    EMPTY_TAB_ALWAYS_EMPTY,
+    EMPTY_TAB_LOST_ROWS,
+    coerce_rows,
+    empty_tab_severity,
+)
 from .lib.canon import CANON
 from .lib.contract import (
     CTYPE_BOOL,
@@ -136,10 +142,7 @@ def _prev_rows(dataset) -> int:
         value = dataset['prev_row_count']
     except (KeyError, IndexError, TypeError):
         return 0
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
-        return 0
+    return coerce_rows(value)
 
 
 def _empty_tab_finding(dataset) -> tuple:
@@ -154,15 +157,18 @@ def _empty_tab_finding(dataset) -> tuple:
 
     The guard's *behaviour* does not vary -- zero rows never become deletions
     either way. Only the volume does.
+
+    The grading itself lives in ``drift_rules`` because the stager reaches the
+    same conclusion one phase earlier, and the two must not drift apart.
     """
     previous = _prev_rows(dataset)
-    if previous > 0:
-        return (DRIFT_EMPTY_TAB, 'error',
+    if empty_tab_severity(previous) == EMPTY_TAB_LOST_ROWS:
+        return (DRIFT_EMPTY_TAB, EMPTY_TAB_LOST_ROWS,
                 'dataset %s (%s) staged zero rows; the last complete read had '
                 '%s. SPEC 9.6 treats this as a mass-delete signal, never as '
                 '"all rows deleted"'
                 % (dataset['id'], dataset['tab_title'], previous))
-    return (DRIFT_EMPTY_TAB, 'info',
+    return (DRIFT_EMPTY_TAB, EMPTY_TAB_ALWAYS_EMPTY,
             'dataset %s (%s) has zero staged rows and no previous complete '
             'read had any; nothing was lost'
             % (dataset['id'], dataset['tab_title']))

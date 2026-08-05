@@ -52,6 +52,7 @@ import sqlite3
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .config import Config
+from .drift_rules import carried_baseline, empty_tab_severity
 from .lib.canon import CANON
 from .lib.contract import (
     CTYPE_TEXT,
@@ -118,6 +119,23 @@ def _now() -> str:
 def _looks_like_identifier(header_text: str) -> bool:
     """True when ``header_text`` merely *suggests* an identifier column."""
     return bool(_IDENTIFIER_HINT_RE.search(header_text or ''))
+
+
+def _is_office_lock_file(name: Optional[str]) -> bool:
+    """True for the ``~$Book.xlsx`` owner files Excel writes beside a workbook.
+
+    They are a few hundred bytes of lock metadata, not OOXML, but Drive stores
+    them under the spreadsheet MIME type and so the crawl hands them over as
+    though they were workbooks. Every one produces the same permanent
+    ``unsupported_mime`` error on every cycle -- noise that never resolves and
+    that trains a reader to skim past the error list where a real corrupt
+    upload would appear.
+
+    Matched on the ``~$`` prefix only. A real workbook a human named this way
+    would be skipped too; that is the trade, and it is the right one, because
+    the prefix is reserved by Office precisely so that nothing else uses it.
+    """
+    return (name or '').startswith('~$')
 
 
 def _row_is_blank(row: Sequence[Any]) -> bool:
@@ -238,7 +256,8 @@ class Stager:
         for mime in XLSX_MIMES:
             for row in self.store.nodes(mime_type=mime):
                 seen[row['file_id']] = row
-        return sorted(seen.values(), key=lambda r: (r['name'] or '', r['file_id']))
+        return sorted((r for r in seen.values() if not _is_office_lock_file(r['name'])),
+                      key=lambda r: (r['name'] or '', r['file_id']))
 
     def _find_node(self, file_id: str) -> Optional[sqlite3.Row]:
         for row in self._spreadsheet_nodes():
@@ -467,11 +486,19 @@ class Stager:
                 spec_version=None, h_dataset=None, bucket_hashes=[],
                 read_complete=True, blocked_reason='empty_tab',
             )
+            # Graded, not hardcoded: a tab that has always been empty is a
+            # fact about the corpus and a tab that just lost rows is an
+            # emergency, and the verifier already tells them apart. Emitting
+            # every empty tab as `warning` here put the same tabs in the store
+            # twice under two severities in one cycle, and buried the one that
+            # mattered under hundreds that never had a row to lose.
+            baseline = carried_baseline(prev)
             self.store.record_drift(
-                run_id, dataset_id, 'empty_tab', now, severity='warning',
+                run_id, dataset_id, 'empty_tab', now,
+                severity=empty_tab_severity(baseline),
                 detail='Tab %r read 0 usable data row(s) (previous row_count=%s); rows '
                        'left unchanged rather than replaced with zero.'
-                       % (tab_title, prev['row_count'] if prev is not None else 'n/a'),
+                       % (tab_title, baseline if prev is not None else 'n/a'),
             )
             return {'rows': 0, 'blocked': 1}
 

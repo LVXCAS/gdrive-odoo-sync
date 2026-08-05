@@ -69,6 +69,11 @@ stopping the service, and the drift digest is mailed when the *set of
 findings changes* — not every cycle, because an hourly mail that says the
 same thing every hour is a mail you stop reading.
 
+The digest and the dashboard both report the **whole cycle** — crawl, stage
+and verify — because staging records drift of its own, and `type_coercion` is
+recorded nowhere else. Where both phases see the same thing, the verifier's
+copy is the one reported, so nothing is counted twice.
+
 `scripts/install-service.ps1` registers it as a Windows scheduled task;
 `deploy/driftwatch.service` is the systemd equivalent. See
 [DEPLOY.md](DEPLOY.md).
@@ -100,7 +105,14 @@ These are the reason the code is shaped the way it is:
   is an `error`. A corpus full of blank `Sheet2` tabs would otherwise bury the
   one tab that just lost twenty thousand rows. The baseline only advances on a
   complete read, so a truncated one cannot erase it and mask the next real
-  deletion.
+  deletion. Both phases that can report an empty tab grade it the same way —
+  the rule lives in `drift_rules.py` precisely so it cannot be applied in one
+  phase and forgotten in the other.
+- **Excel lock files are not spreadsheets.** Drive reports `~$Book.xlsx` under
+  a spreadsheet MIME type; it is a few hundred bytes of Office lock metadata.
+  They are skipped rather than parsed and failed on every cycle, because a
+  permanent error nobody can act on is what teaches a reader to skim past the
+  error list where a genuinely corrupt upload is waiting.
 - **Identifier columns are never numerically coerced.** Sheets turns `0012345`
   into `12345` given the chance. Identifier-looking headers stay text, and a
   numeric value in one is quarantined as `type_coercion` rather than staged.
@@ -147,6 +159,7 @@ confident false findings.
 | `lib/` | Canonicalization and Merkle hashing. Copied verbatim from the Odoo addon; zero dependencies on either platform. |
 | `services/` | Google auth (domain-wide delegation), Drive discovery, changes cursor, Sheets and xlsx readers, retry, rate limiting. Also verbatim. |
 | `config.py` | Environment and `.env` resolution. |
+| `drift_rules.py` | Rules more than one phase applies, so they cannot disagree. |
 | `store.py` | SQLite schema and all persistence. |
 | `crawler.py` | Drive walk. |
 | `stager.py` | Tabs to canonical hashed rows. |

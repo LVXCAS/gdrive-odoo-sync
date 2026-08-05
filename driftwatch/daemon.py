@@ -255,8 +255,12 @@ class Daemon:
             log.info('no verify run to report on')
             return
 
-        findings = [dict(r) for r in self.store.drifts(run_id=run_id)]
-        summary = self.store.drift_summary(run_id=run_id)
+        # The whole cycle, not just the verify run: staging records drift of
+        # its own, and a digest that omits it is a digest that never mentions
+        # the coercions -- the findings that cannot be undone later.
+        cycle = self.store.latest_cycle_run_ids()
+        findings = [dict(r) for r in self.store.cycle_drifts()]
+        summary = self.store.cycle_drift_summary()
 
         empty = self._watching_nothing()
         if empty:
@@ -267,7 +271,8 @@ class Daemon:
         current = notify.fingerprint(findings)
         previous = self.store.get_meta('alert_fingerprint')
 
-        log.info('verify run #%s: %s finding(s)', run_id, len(findings))
+        log.info('cycle %s (verify run #%s): %s finding(s)',
+                 '+'.join(str(r) for r in cycle) or 'none', run_id, len(findings))
         if current == previous:
             log.info('finding set unchanged -- no digest sent')
             return
