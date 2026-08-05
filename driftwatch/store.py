@@ -313,6 +313,26 @@ class Store:
         self.conn.commit()
         return int(cur.lastrowid)
 
+    def latest_run(self, kind: str) -> Optional[sqlite3.Row]:
+        """Newest run of a kind, finished or not. ``None`` if there is none."""
+        return self.conn.execute(
+            'SELECT * FROM run WHERE kind = ? ORDER BY id DESC LIMIT 1',
+            (kind,)).fetchone()
+
+    def latest_run_id(self, kind: str) -> Optional[int]:
+        row = self.latest_run(kind)
+        return int(row['id']) if row else None
+
+    def latest_run_stats(self, kind: str) -> dict:
+        """The newest run's stats blob, or ``{}``."""
+        row = self.latest_run(kind)
+        if not row:
+            return {}
+        try:
+            return json.loads(row['stats_json'] or '{}')
+        except (ValueError, TypeError):
+            return {}
+
     def finish_run(self, run_id: int, now: str, status: str,
                    stats: Optional[dict] = None, error: str = '') -> None:
         self.conn.execute(

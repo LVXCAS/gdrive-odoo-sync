@@ -43,6 +43,31 @@ def _load_dotenv(path: Path) -> dict:
     return out
 
 
+def _duration(text: str, default: int) -> int:
+    """Seconds from ``900``, ``15m``, ``2h`` or ``1d``.
+
+    Bare numbers stay seconds so an existing integer setting keeps its meaning.
+    """
+    text = (text or '').strip().lower()
+    if not text:
+        return default
+    units = {'s': 1, 'm': 60, 'h': 3600, 'd': 86400}
+    scale = units.get(text[-1], 1)
+    if scale != 1:
+        text = text[:-1]
+    try:
+        return max(1, int(float(text) * scale))
+    except ValueError:
+        return default
+
+
+def _flag(text: str, default: bool) -> bool:
+    text = (text or '').strip().lower()
+    if not text:
+        return default
+    return text in ('1', 'true', 'yes', 'on')
+
+
 @dataclass(frozen=True)
 class Config:
     """Resolved runtime configuration."""
@@ -61,9 +86,30 @@ class Config:
     sheets_reads_per_min: int = 60
     drive_reads_per_min: int = 300
 
+    # Unattended operation. Only the daemon reads these; the one-shot commands
+    # behave exactly as they did before.
+    interval_seconds: int = 3600
+    log_dir: Path = REPO_ROOT / 'logs'
+    log_retain: int = 14               # rotated files kept, one per day
+
+    # Drift digest email. Absent SMTP settings disable alerting; they do not
+    # stop the service. A crawler that refuses to run because nobody set up
+    # mail is a crawler that silently stops watching.
+    smtp_host: str = ''
+    smtp_port: int = 587
+    smtp_user: str = ''
+    smtp_password: str = ''
+    smtp_starttls: bool = True
+    alert_from: str = ''
+    alert_to: tuple = ()
+
     @property
     def scopes(self) -> tuple:
         return SCOPES
+
+    @property
+    def alerts_enabled(self) -> bool:
+        return bool(self.smtp_host and self.alert_to)
 
     def service_account_info(self) -> dict:
         """Load and sanity-check the key. Raises before any network call."""
@@ -88,6 +134,15 @@ class Config:
             'odoo_login': self.odoo_login,
             'odoo_api_key': '***' if self.odoo_api_key else '(unset)',
             'db_path': str(self.db_path),
+            'interval_seconds': self.interval_seconds,
+            'log_dir': str(self.log_dir),
+            'smtp_host': self.smtp_host or '(unset)',
+            'smtp_port': self.smtp_port,
+            'smtp_user': self.smtp_user or '(unset)',
+            'smtp_password': '***' if self.smtp_password else '(unset)',
+            'alert_from': self.alert_from or '(unset)',
+            'alert_to': list(self.alert_to),
+            'alerts_enabled': self.alerts_enabled,
         }
 
 
@@ -124,4 +179,17 @@ def load_config(dotenv: Optional[Path] = None) -> Config:
         max_files=int(get('DRIFTWATCH_MAX_FILES', '0') or 0),
         sheets_reads_per_min=int(get('DRIFTWATCH_SHEETS_RPM', '60') or 60),
         drive_reads_per_min=int(get('DRIFTWATCH_DRIVE_RPM', '300') or 300),
+        interval_seconds=_duration(get('DRIFTWATCH_INTERVAL'), 3600),
+        log_dir=Path(get('DRIFTWATCH_LOG_DIR', str(REPO_ROOT / 'logs'))),
+        log_retain=int(get('DRIFTWATCH_LOG_RETAIN', '14') or 14),
+        smtp_host=get('DRIFTWATCH_SMTP_HOST'),
+        smtp_port=int(get('DRIFTWATCH_SMTP_PORT', '587') or 587),
+        smtp_user=get('DRIFTWATCH_SMTP_USER'),
+        smtp_password=get('DRIFTWATCH_SMTP_PASSWORD'),
+        smtp_starttls=_flag(get('DRIFTWATCH_SMTP_STARTTLS'), True),
+        # Most providers reject a From: that is not the authenticated mailbox,
+        # so defaulting to the SMTP user is the setting that actually delivers.
+        alert_from=get('DRIFTWATCH_ALERT_FROM', get('DRIFTWATCH_SMTP_USER')),
+        alert_to=tuple(a.strip() for a in get('DRIFTWATCH_ALERT_TO').split(',')
+                       if a.strip()),
     )

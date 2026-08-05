@@ -8,6 +8,8 @@
     python -m driftwatch status     # what is in the local store
     python -m driftwatch drift      # list findings
     python -m driftwatch sync       # crawl + stage + verify
+    python -m driftwatch daemon     # sync on a loop, forever, and mail on drift
+    python -m driftwatch alert-test # prove the mail path before trusting it
 
 WHY every command is read-only by default: this tool exists to tell you whether
 two systems agree, and a tool that changes one of them while measuring it
@@ -169,6 +171,17 @@ def cmd_status(cfg, store, args) -> int:
     counts = store.count_nodes()
     total = sum(counts.values())
     print(f'store: {store.path}')
+
+    # Whether the unattended service is alive, without reading a log file.
+    last = store.get_meta('daemon_cycle_finished_at')
+    if last:
+        state = store.get_meta('daemon_status') or '?'
+        fails = store.get_meta('daemon_consecutive_failures') or '0'
+        print(f'daemon: last cycle {state} at {last} UTC'
+              + (f'  ({fails} consecutive failure(s))' if fails != '0' else ''))
+        err = store.get_meta('daemon_error')
+        if err:
+            print(f'  last error: {err}')
     print(f'\n{_fmt(total, "live Drive object")}:')
     for mime, n in list(counts.items())[:15]:
         short = mime.rsplit('.', 1)[-1] if '.' in mime else mime
@@ -222,6 +235,49 @@ def cmd_sync(cfg, store, args) -> int:
     return 0
 
 
+def cmd_daemon(cfg, store, args) -> int:
+    """Run the sync cycle on a loop until something stops the process."""
+    from dataclasses import replace
+
+    from . import daemon
+
+    if args.no_email:
+        cfg = replace(cfg, alert_to=())
+    return daemon.run(cfg, store, args)
+
+
+def cmd_alert_test(cfg, store, args) -> int:
+    """Send one digest built from the latest verify run.
+
+    Worth running once before you walk away from the service: an SMTP problem
+    discovered the first time there is real drift is discovered too late.
+    """
+    from . import notify
+
+    if not cfg.alerts_enabled:
+        print('email is not configured -- set DRIFTWATCH_SMTP_HOST and '
+              'DRIFTWATCH_ALERT_TO (see .env.example)')
+        return 1
+
+    run_id = store.latest_run_id('verify')
+    findings = [dict(r) for r in store.drifts(run_id=run_id)] if run_id else []
+    summary = store.drift_summary(run_id=run_id) if run_id else {}
+    subject, body = notify.render_digest(
+        findings, summary, db_path=str(store.path), finished_at=_now(),
+        host=notify.hostname())
+    subject = f'[test] {subject}'
+
+    print(f'sending to {", ".join(cfg.alert_to)} via '
+          f'{cfg.smtp_host}:{cfg.smtp_port} ...')
+    try:
+        notify.send_digest(cfg, subject, body)
+    except Exception as exc:
+        print(f'FAILED  {type(exc).__name__}: {exc}')
+        return 1
+    print(f'sent: {subject}')
+    return 0
+
+
 # --------------------------------------------------------------------------- #
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -256,6 +312,24 @@ def build_parser() -> argparse.ArgumentParser:
     y.add_argument('--limit', type=int, default=None)
     y.add_argument('--staging-only', action='store_true')
     y.add_argument('--mapping', default=None)
+
+    m = sub.add_parser('daemon', help='run sync on a loop and mail on drift')
+    m.add_argument('--interval', default=None,
+                   help='time between cycles: 900, 15m, 2h, 1d '
+                        '(default: DRIFTWATCH_INTERVAL, or 1h)')
+    m.add_argument('--once', action='store_true',
+                   help='run a single cycle and exit -- for testing, or for '
+                        'driving the service from an external scheduler')
+    m.add_argument('--no-email', action='store_true',
+                   help='record and log drift, but send no digest')
+    m.add_argument('--verbose', action='store_true')
+    # Passed straight through to the crawl/stage/verify phases.
+    m.add_argument('--incremental', action='store_true')
+    m.add_argument('--limit', type=int, default=None)
+    m.add_argument('--staging-only', action='store_true')
+    m.add_argument('--mapping', default=None)
+
+    sub.add_parser('alert-test', help='send one digest now, to prove SMTP works')
     return p
 
 
@@ -266,7 +340,7 @@ def main(argv: Optional[list] = None) -> int:
     handler = {
         'probe': cmd_probe, 'crawl': cmd_crawl, 'stage': cmd_stage,
         'verify': cmd_verify, 'status': cmd_status, 'drift': cmd_drift,
-        'sync': cmd_sync,
+        'sync': cmd_sync, 'daemon': cmd_daemon, 'alert-test': cmd_alert_test,
     }[args.command]
     try:
         return handler(cfg, store, args)
