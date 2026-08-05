@@ -20,7 +20,7 @@ cannot answer the question it was built to answer.
 pip install -r ../requirements.txt
 ```
 
-Create `../.env`:
+Create `../.env` — copy `../.env.example`, which documents every setting:
 
 ```
 DRIFTWATCH_SA_KEY=C:\path\to\service-account-key.json
@@ -53,6 +53,23 @@ python -m driftwatch status            # what is in the local store
 python -m driftwatch drift --type duplicate_identity
 python -m driftwatch sync              # all of the above
 ```
+
+## Running it unattended
+
+```
+python -m driftwatch daemon --interval 1h   # sync on a loop, mail on drift
+python -m driftwatch alert-test             # prove SMTP before trusting it
+python -m driftwatch status                 # includes the daemon heartbeat
+```
+
+One long-lived process. A failed cycle backs off and retries rather than
+stopping the service, and the drift digest is mailed when the *set of
+findings changes* — not every cycle, because an hourly mail that says the
+same thing every hour is a mail you stop reading.
+
+`scripts/install-service.ps1` registers it as a Windows scheduled task;
+`deploy/driftwatch.service` is the systemd equivalent. See
+[DEPLOY.md](DEPLOY.md).
 
 ## How verification works
 
@@ -128,6 +145,9 @@ confident false findings.
 | `odoo_client.py` | XML-RPC, standard Odoo models only. |
 | `verifier.py` | The comparison engine. |
 | `cli.py` | Command line. |
+| `daemon.py` | The supervised loop: cycle, back off, stay alive. |
+| `notify.py` | Drift digest — fingerprint, rendering, SMTP. |
+| `tests/` | Service tests. Stdlib `unittest`; no network, no Odoo. |
 
 `lib/` and `services/` are byte-identical to their copies in the
 `gdrive_odoo_sync` Odoo addon. If Odoo.sh ever becomes available, that addon

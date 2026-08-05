@@ -1,0 +1,50 @@
+# The DriftWatch service tests. They touch no network and need no Odoo, so
+# they are safe to run on a public runner: nothing here reads a credential or
+# a copy of the corpus.
+#
+# The Odoo addon's tests (gdrive_odoo_sync/tests) need an Odoo runtime and are
+# deliberately not run here.
+name: tests
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  driftwatch:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # windows-latest because that is where the service actually runs;
+        # ubuntu-latest because deploy/driftwatch.service says it may not
+        # always. Path handling and the signal set differ between them.
+        os: [windows-latest, ubuntu-latest]
+        python-version: ['3.11', '3.12']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Run the service tests
+        run: python -m unittest discover -s driftwatch/tests -t . -v
+
+      - name: Check every module imports
+        # A syntax error or a bad import in a rarely-exercised path should
+        # fail here, not at 3am in a cycle nobody is watching.
+        run: |
+          python -m compileall -q driftwatch
+          python -c "import driftwatch.cli, driftwatch.daemon, driftwatch.notify, driftwatch.config, driftwatch.store"
+
+      - name: Check the CLI parses
+        run: |
+          python -m driftwatch --help
+          python -m driftwatch daemon --help
