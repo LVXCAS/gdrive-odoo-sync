@@ -23,7 +23,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 PRAGMA journal_mode = WAL;
@@ -68,6 +68,12 @@ CREATE TABLE IF NOT EXISTS dataset (
     tab_title      TEXT NOT NULL,
     header_json    TEXT NOT NULL DEFAULT '[]',
     row_count      INTEGER NOT NULL DEFAULT 0,
+    -- Rows the last COMPLETE read of this tab produced. The empty-tab guard
+    -- (SPEC 9.6) fires on "was N, now 0" -- a mass-delete signal -- and a tab
+    -- that has always been empty is not that. Only complete reads update it:
+    -- letting a truncated read write 0 here would erase the baseline and mask
+    -- the very deletion the guard exists to catch.
+    prev_row_count INTEGER NOT NULL DEFAULT 0,
     col_count      INTEGER NOT NULL DEFAULT 0,
     spec_version   TEXT,
     h_dataset      TEXT,
@@ -139,7 +145,29 @@ class Store:
         self.conn = sqlite3.connect(str(self.path))
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        self._migrate()
         self.set_meta('schema_version', str(SCHEMA_VERSION))
+
+    def _migrate(self) -> None:
+        """Additive, idempotent upgrades for stores created by an older build.
+
+        ``CREATE TABLE IF NOT EXISTS`` silently does nothing to a table that
+        already exists, so a new column has to be added explicitly or every
+        existing store keeps the old shape and fails on first use.
+        """
+        columns = {r['name'] for r in
+                   self.conn.execute('PRAGMA table_info(dataset)')}
+
+        if 'prev_row_count' not in columns:
+            self.conn.execute('ALTER TABLE dataset ADD COLUMN prev_row_count '
+                              'INTEGER NOT NULL DEFAULT 0')
+            # Seed from the counts already in the table rather than leaving
+            # every baseline at zero. Those counts came from a complete read,
+            # and a zero baseline would make the guard blind for exactly one
+            # cycle -- the cycle right after an upgrade.
+            self.conn.execute('UPDATE dataset SET prev_row_count = row_count '
+                              'WHERE read_complete = 1')
+            self.conn.commit()
 
     # ------------------------------------------------------------------ #
     # plumbing
@@ -247,6 +275,13 @@ class Store:
                                  read_complete, blocked_reason, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(file_id, tab_id) DO UPDATE SET
+                -- Unqualified names are the row as it was before this read;
+                -- `excluded.` is the row this read is bringing in. Carry the
+                -- baseline forward untouched when the PREVIOUS read was
+                -- incomplete, so a truncated read cannot erase it.
+                prev_row_count = CASE WHEN dataset.read_complete = 1
+                                      THEN dataset.row_count
+                                      ELSE dataset.prev_row_count END,
                 tab_title      = excluded.tab_title,
                 header_json    = excluded.header_json,
                 row_count      = excluded.row_count,

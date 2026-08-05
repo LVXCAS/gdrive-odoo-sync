@@ -94,7 +94,13 @@ These are the reason the code is shaped the way it is:
   refused outright. A short read looks exactly like mass deletion.
 - **An empty tab is a signal, not an instruction.** Zero rows where there were N
   is the shape of a renamed tab, a revoked grant, or a failed read. Rows are
-  left as they were rather than replaced with nothing.
+  left as they were rather than replaced with nothing. The refusal is
+  unconditional, but the *report* distinguishes the two cases: a tab that has
+  always been empty is `info`, and only a tab that lost rows it previously had
+  is an `error`. A corpus full of blank `Sheet2` tabs would otherwise bury the
+  one tab that just lost twenty thousand rows. The baseline only advances on a
+  complete read, so a truncated one cannot erase it and mask the next real
+  deletion.
 - **Identifier columns are never numerically coerced.** Sheets turns `0012345`
   into `12345` given the chance. Identifier-looking headers stay text, and a
   numeric value in one is quarantined as `type_coercion` rather than staged.

@@ -130,6 +130,44 @@ DRIFT_READ_INCOMPLETE = 'read_incomplete'
 DRIFT_IDENTIFIER_NUMERIC = 'identifier_numeric'
 DRIFT_SCHEMA_GROWTH = 'schema_growth'
 
+def _prev_rows(dataset) -> int:
+    """Rows the last complete read produced, tolerant of a pre-migration row."""
+    try:
+        value = dataset['prev_row_count']
+    except (KeyError, IndexError, TypeError):
+        return 0
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _empty_tab_finding(dataset) -> tuple:
+    """``(drift_type, severity, detail)`` for a tab that staged zero rows.
+
+    SPEC 9.6 defines the empty-tab guard as *0 data rows where the previous
+    complete run had N > 0* -- a mass-delete signal. A tab that has always
+    been empty is not that, and reporting the two identically is how the
+    dangerous case gets buried: a corpus of ordinary blank ``Sheet2`` and
+    ``Notes`` tabs produces hundreds of errors, and the one tab that just lost
+    twenty thousand rows arrives as another line in that list.
+
+    The guard's *behaviour* does not vary -- zero rows never become deletions
+    either way. Only the volume does.
+    """
+    previous = _prev_rows(dataset)
+    if previous > 0:
+        return (DRIFT_EMPTY_TAB, 'error',
+                'dataset %s (%s) staged zero rows; the last complete read had '
+                '%s. SPEC 9.6 treats this as a mass-delete signal, never as '
+                '"all rows deleted"'
+                % (dataset['id'], dataset['tab_title'], previous))
+    return (DRIFT_EMPTY_TAB, 'info',
+            'dataset %s (%s) has zero staged rows and no previous complete '
+            'read had any; nothing was lost'
+            % (dataset['id'], dataset['tab_title']))
+
+
 DRIFT_TYPES = frozenset({
     DRIFT_MISSING_IN_ODOO, DRIFT_MISSING_IN_SHEET, DRIFT_FIELD_MISMATCH,
     DRIFT_DUPLICATE_IDENTITY, DRIFT_HEADER_CHANGE, DRIFT_EMPTY_TAB,
@@ -383,9 +421,8 @@ class Verifier:
     def _verify_staging_only(self, dataset, rows, record, result: dict) -> None:
         """Internal-only checks: no Odoo-side finding is ever emitted here."""
         if not rows:
-            record(DRIFT_EMPTY_TAB, 'error',
-                  detail='dataset %s (%s) has zero staged rows'
-                         % (dataset['id'], dataset['tab_title']))
+            drift_type, severity, detail = _empty_tab_finding(dataset)
+            record(drift_type, severity, detail=detail)
             return
 
         # ---- duplicate identities, bucketed by the stager's own natural_key,
@@ -455,11 +492,13 @@ class Verifier:
             return
 
         # ---- guard: an empty sheet side is never evidence of deletion -----
+        # The refusal is unconditional. Only how loudly it is reported depends
+        # on whether anything was actually lost.
         if not rows:
-            record(DRIFT_EMPTY_TAB, 'error',
-                  detail='dataset %s (%s) has zero staged rows; refusing to treat this '
-                         'as evidence that the matching %s records were deleted'
-                         % (dataset['id'], dataset['tab_title'], model))
+            drift_type, severity, detail = _empty_tab_finding(dataset)
+            record(drift_type, severity,
+                   detail=detail + '; refusing to treat this as evidence that '
+                                   'the matching %s records were deleted' % model)
             return
 
         parsed_rows = [(row, _load_json(row['canon_json']), _load_json(row['raw_json']))
