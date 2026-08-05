@@ -79,6 +79,16 @@ Thumbs.db
 desktop.ini
 
 # ---------------------------------------------------------------------------
+# DriftWatch runtime output.
+#
+# The dashboard embeds staged content -- Drive file names, tab titles, and the
+# sheet and Odoo values behind every finding. It is as sensitive as the
+# datastore itself and must never be committed.
+# ---------------------------------------------------------------------------
+logs/
+dashboard.html
+
+# ---------------------------------------------------------------------------
 # DriftWatch local datastore.
 #
 # This SQLite file holds real staged business data pulled from Drive --

@@ -60,6 +60,8 @@ python -m driftwatch sync              # all of the above
 python -m driftwatch daemon --interval 1h   # sync on a loop, mail on drift
 python -m driftwatch alert-test             # prove SMTP before trusting it
 python -m driftwatch status                 # includes the daemon heartbeat
+python -m driftwatch dashboard --open       # the whole picture, on one page
+python -m driftwatch dashboard --serve      # live at 127.0.0.1:8787
 ```
 
 One long-lived process. A failed cycle backs off and retries rather than
@@ -147,6 +149,7 @@ confident false findings.
 | `cli.py` | Command line. |
 | `daemon.py` | The supervised loop: cycle, back off, stay alive. |
 | `notify.py` | Drift digest — fingerprint, rendering, SMTP. |
+| `dashboard.py` | The local one-page view. Read-only; never published. |
 | `tests/` | Service tests. Stdlib `unittest`; no network, no Odoo. |
 
 `lib/` and `services/` are byte-identical to their copies in the

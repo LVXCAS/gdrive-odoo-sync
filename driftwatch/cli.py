@@ -22,6 +22,7 @@ import argparse
 import datetime
 import json
 import sys
+from pathlib import Path
 from typing import Optional
 
 from .config import load_config
@@ -235,6 +236,30 @@ def cmd_sync(cfg, store, args) -> int:
     return 0
 
 
+def cmd_dashboard(cfg, store, args) -> int:
+    """Render the local dashboard, or serve it on the loopback interface."""
+    import webbrowser
+
+    from . import dashboard
+
+    db_path = Path(args.db or cfg.db_path)
+
+    if args.serve:
+        return dashboard.serve(cfg, db_path, args.host, args.port)
+
+    # Read-only: the daemon is usually mid-cycle and holds the write lock.
+    conn = dashboard.open_readonly(db_path)
+    try:
+        out = dashboard.write(conn, cfg,
+                              Path(args.output or cfg.dashboard_path))
+    finally:
+        conn.close()
+    print(f'wrote {out}')
+    if args.open:
+        webbrowser.open(out.resolve().as_uri())
+    return 0
+
+
 def cmd_daemon(cfg, store, args) -> int:
     """Run the sync cycle on a loop until something stops the process."""
     from dataclasses import replace
@@ -330,22 +355,38 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument('--mapping', default=None)
 
     sub.add_parser('alert-test', help='send one digest now, to prove SMTP works')
+
+    b = sub.add_parser('dashboard', help='render or serve the local dashboard')
+    b.add_argument('--serve', action='store_true',
+                   help='keep serving a live page instead of writing a file')
+    b.add_argument('--host', default='127.0.0.1',
+                   help='serve address (default loopback -- the page contains '
+                        'staged business content and has no auth in front)')
+    b.add_argument('--port', type=int, default=8787)
+    b.add_argument('--output', default=None, help='where to write the HTML')
+    b.add_argument('--open', action='store_true',
+                   help='open the written file in a browser')
     return p
 
 
 def main(argv: Optional[list] = None) -> int:
     args = build_parser().parse_args(argv)
     cfg = load_config()
-    store = Store(args.db or cfg.db_path)
+    # The dashboard opens its own read-only handle. Taking the read-write one
+    # here would make a browser refresh contend with a running crawl for the
+    # write lock, for a connection the command never uses.
+    store = None if args.command == 'dashboard' else Store(args.db or cfg.db_path)
     handler = {
         'probe': cmd_probe, 'crawl': cmd_crawl, 'stage': cmd_stage,
         'verify': cmd_verify, 'status': cmd_status, 'drift': cmd_drift,
         'sync': cmd_sync, 'daemon': cmd_daemon, 'alert-test': cmd_alert_test,
+        'dashboard': cmd_dashboard,
     }[args.command]
     try:
         return handler(cfg, store, args)
     finally:
-        store.close()
+        if store is not None:
+            store.close()
 
 
 if __name__ == '__main__':

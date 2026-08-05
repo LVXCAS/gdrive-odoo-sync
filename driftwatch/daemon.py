@@ -160,6 +160,8 @@ class Daemon:
         self.failures = 0
         self._heartbeat(started, 'ok', '')
 
+        self._write_dashboard()
+
         try:
             self._maybe_alert(started)
         except Exception as exc:                      # noqa: BLE001
@@ -185,6 +187,20 @@ class Daemon:
                     log.info('%s', line.rstrip())
             if rc:
                 raise RuntimeError(f'{name} returned exit code {rc}')
+
+    def _write_dashboard(self) -> None:
+        """Refresh the local page so it is current without anything serving it.
+
+        Uses this process's own connection rather than reopening the store:
+        the daemon is the writer, so it already has the consistent view.
+        """
+        try:
+            from . import dashboard
+            dashboard.write(self.store.conn, self.cfg, self.cfg.dashboard_path)
+        except Exception as exc:                      # noqa: BLE001
+            # A dashboard is a convenience. It never costs a cycle.
+            log.warning('dashboard not written: %s: %s',
+                        type(exc).__name__, exc)
 
     def _heartbeat(self, started: str, status: str, error: str) -> None:
         """Liveness a human (or a check script) can read without log parsing."""
